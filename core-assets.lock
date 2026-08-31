@@ -5,4 +5,3 @@ linux_amd64 93a05c2b4338c4f9ed38006f630d75c942c464fc9a6586b94e9519e2ddd7ee8a htt
 linux_arm64 e7a38b931f3aef37ae586e593d05f352bd0aa43734566fa2a48f1d51d1cfe73d https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.0/libduckflight_core_ffi-linux_arm64.so
 osx_amd64 b91f359b9ad735f06bace891e824560dd35f2807d70dbe5022d688656e75ab40 https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.0/libduckflight_core_ffi-osx_amd64.dylib
 osx_arm64 68152b78a6eb778dd50bd93a93a1a25d9f3027e961110d7c7e8ce3b963bc3fbd https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.0/libduckflight_core_ffi-osx_arm64.dylib
-windows_amd64 8d8bb240ef9514f47931b80c51b9aaf27778fa1f72c03f42505288f445c83c42 https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.0/duckflight_core_ffi-windows_amd64.dll

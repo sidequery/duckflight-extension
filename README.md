@@ -108,6 +108,10 @@ The distribution workflow uses DuckDB's reusable build, test, metadata, and pack
 DuckDB v1.5.5. Generated shared libraries, build trees, and `.duckdb_extension` artifacts are ignored
 and must not be committed.
 
+The initial Community release supports Linux and macOS on amd64 and arm64. Windows, WebAssembly,
+and Linux musl are explicitly excluded until matching bundled core payloads pass the same release
+smoke test; unsupported platforms never fall back to a source checkout or runtime download.
+
 An authorized release build embeds the private core directly into the extension:
 
 ```sh

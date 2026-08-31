@@ -27,11 +27,12 @@ build must download the exact platform library before Cargo runs, verify it, and
 single `.duckdb_extension`; there is no runtime download or sidecar installation. Do not use a
 `latest` URL.
 
-`core-assets.lock` pins the five `core-v0.1.0` payloads used by the standard `make release` invoked by
-DuckDB's reusable CI. The downloaded library stays under the ignored `build/` tree and is embedded
-into the final extension; it is never committed or installed on the user's machine as a sidecar.
-Release smoke tests load that embedded production core. Mock lifecycle tests remain separate so the
-distribution matrix does not start network listeners.
+`core-assets.lock` pins the four Linux and macOS `core-v0.1.0` payloads used by the standard
+`make release` invoked by DuckDB's reusable CI. The downloaded library stays under the ignored
+`build/` tree and is embedded into the final extension; it is never committed or installed on the
+user's machine as a sidecar. Release smoke tests load that embedded production core. Mock lifecycle
+tests remain separate so the distribution matrix does not start network listeners. Windows is
+explicitly excluded from the initial Community release rather than shipping an unvalidated payload.
 
 Every core asset must include an explicit binary-distribution license from the core copyright
 holder that is compatible with the extension's MIT metadata. The core owner may dual-license that
