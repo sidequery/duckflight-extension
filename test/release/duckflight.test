@@ -1,0 +1,9 @@
+# Production release smoke test: prove that the embedded core loads through the
+# public ABI. Listener behavior is covered by the open mock in test/sql without
+# starting network services in DuckDB's distribution matrix.
+require duckflight
+
+query TT
+select loaded::varchar, abi_version::varchar from duckflight_core_status();
+----
+true	1

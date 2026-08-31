@@ -24,6 +24,10 @@ all: configure debug
 include extension-ci-tools/makefiles/c_api_extensions/base.Makefile
 include extension-ci-tools/makefiles/c_api_extensions/rust.Makefile
 
+# Release artifacts embed the production core, so their smoke test must not use
+# the mock-only lifecycle expectations from test/sql.
+TEST_RUNNER_RELEASE=$(TEST_RUNNER) --test-dir test/release $(EXTRA_EXTENSIONS_PARAM) --external-extension build/release/$(EXTENSION_NAME).duckdb_extension
+
 configure: venv platform extension_version
 
 debug: build_extension_library_debug build_extension_with_metadata_debug
@@ -49,7 +53,7 @@ build_mock_core:
 bundled_release:
 	./scripts/build-bundled.sh "$(DUCKFLIGHT_CORE_REPO)"
 
-test_extension_debug_internal test_extension_release_internal: build_mock_core
+test_extension_debug_internal: build_mock_core
 
 clean: clean_build clean_rust
 clean_all: clean_configure clean

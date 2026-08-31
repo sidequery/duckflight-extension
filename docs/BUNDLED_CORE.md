@@ -25,14 +25,13 @@ versioned GitHub Release assets, with a pinned SHA-256 for every supported platf
 build must download the exact platform library before Cargo runs, verify it, and set
 `DUCKFLIGHT_CORE_BUNDLE_PATH` to that file for the build only. The library bytes become part of the
 single `.duckdb_extension`; there is no runtime download or sidecar installation. Do not use a
-`latest` URL. Until those immutable release assets and checksums exist, the public CI build remains
-the source-review/mock build and is not a production Community artifact.
+`latest` URL.
 
-The repository includes an intentionally empty `core-assets.lock`. Once its platform rows contain
-real immutable URLs and SHA-256 values, the standard `make release` invoked by DuckDB's reusable CI
-downloads and verifies the matching asset before Cargo runs. The downloaded library stays under the
-ignored `build/` tree and is embedded into the final extension; it is never committed or installed
-on the user's machine as a sidecar.
+`core-assets.lock` pins the five `core-v0.1.0` payloads used by the standard `make release` invoked by
+DuckDB's reusable CI. The downloaded library stays under the ignored `build/` tree and is embedded
+into the final extension; it is never committed or installed on the user's machine as a sidecar.
+Release smoke tests load that embedded production core. Mock lifecycle tests remain separate so the
+distribution matrix does not start network listeners.
 
 Every core asset must include an explicit binary-distribution license from the core copyright
 holder that is compatible with the extension's MIT metadata. The core owner may dual-license that

@@ -115,17 +115,17 @@ An authorized release build embeds the private core directly into the extension:
 ```
 
 See [docs/BUNDLED_CORE.md](docs/BUNDLED_CORE.md) for the local build and per-platform GitHub Release
-asset model.
+asset model. The platform payloads are published in the
+[`core-v0.1.0` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.0)
+and checksum-pinned in `core-assets.lock`.
 
 ## Community Extension status
 
 This repository is structured for DuckDB Community Extension CI and includes a provisional
-`description.yml`. Before an upstream submission, its repository URL and `repo.ref` must identify a
-real public Git commit. Whether a Community Extension may require a separately installed proprietary
-runtime is not relevant to the install path: the intended artifact is one bundled extension. Before
-central Community builds can produce it, each immutable platform core library must exist as a GitHub
-Release asset and its exact URL and SHA-256 must be added to `core-assets.lock`. The mandated
-`make release` entrypoint then fetches, verifies, and embeds it during the build.
+`description.yml`. Before an upstream submission, `repo.ref` must identify the public commit to be
+built. There is no separately installed runtime: each immutable platform core library is a GitHub
+Release asset pinned by exact URL and SHA-256 in `core-assets.lock`. The mandated `make release`
+entrypoint fetches, verifies, and embeds it during the build.
 
 ## Security
 
