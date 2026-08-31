@@ -1,31 +1,10 @@
 # DuckFlight DuckDB extension
 
-DuckFlight is a DuckDB extension that exposes the database which loaded it through PostgreSQL's
-wire protocol and Arrow Flight SQL. This repository contains the open-source DuckDB extension shim
-and its versioned C ABI. Production artifacts are platform-specific single-file extensions with the
-DuckFlight core embedded in the `.duckdb_extension`; users do not install a sidecar runtime.
+DuckFlight turns a DuckDB database into a PostgreSQL and Arrow Flight SQL server. Query the same
+tables and views from PostgreSQL clients, ADBC applications, or DuckDB's Airport extension without
+copying the data into a separate database.
 
-## Runtime model
-
-The public source tree remains buildable without private source or binaries. Its development build
-can load an ABI-compatible core dynamically, which is how the open mock is exercised in CI:
-
-```sh
-export DUCKFLIGHT_CORE_PATH=/absolute/path/to/libduckflight_core_ffi.dylib
-duckdb
-```
-
-Use `.so` on Linux and `.dll` on Windows. `LOAD duckflight` deliberately succeeds when this variable
-is absent or invalid, allowing metadata and function-discovery tooling to inspect a public-source
-build. Production builds embed and load the platform core from the extension artifact and ignore
-`DUCKFLIGHT_CORE_PATH`. Status details never expose the host library path:
-
-```sql
-load duckflight;
-select * from duckflight_core_status();
-```
-
-Development server operations return a clear error until a compatible runtime is available.
+## Authentication setup
 
 One `duckflight.toml` configures network authentication and the shared TLS identity. The repository
 includes a dependency-free PEP 723 helper so operators do not need to derive SCRAM fields or bearer
@@ -122,6 +101,25 @@ See [docs/BUNDLED_CORE.md](docs/BUNDLED_CORE.md) for the local build and per-pla
 asset model. The platform payloads are published in the
 [`core-v0.1.0` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.0)
 and checksum-pinned in `core-assets.lock`.
+
+## Development runtime
+
+Production extensions contain everything required at runtime. The public source tree can also build
+without the core for development and CI. Such builds load an ABI-compatible core dynamically:
+
+```sh
+export DUCKFLIGHT_CORE_PATH=/absolute/path/to/libduckflight_core_ffi.dylib
+duckdb
+```
+
+Use `.so` on Linux and `.dll` on Windows. Without a compatible core, `LOAD duckflight` still permits
+metadata inspection while server operations return an availability error. Check the current state
+with:
+
+```sql
+load duckflight;
+select * from duckflight_core_status();
+```
 
 ## Community Extension status
 
