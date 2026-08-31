@@ -1,0 +1,27 @@
+[package]
+name = "duckflight"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Public DuckDB extension shim for the DuckFlight PostgreSQL and Flight SQL runtime"
+repository = "https://github.com/sidequery/duckflight-extension"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[workspace]
+members = ["crates/duckflight-extension-abi", "test/mock_core"]
+default-members = ["."]
+resolver = "2"
+
+[profile.release]
+lto = true
+strip = true
+
+[dependencies]
+duckdb = { version = "~1.10505.0", features = ["loadable-extension", "vscalar"] }
+duckflight-extension-abi = { path = "crates/duckflight-extension-abi" }
+libloading = "0.8"
+subtle = "2.6"
+tempfile = "3.27"

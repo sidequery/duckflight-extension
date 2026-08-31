@@ -1,0 +1,12 @@
+[package]
+name = "duckflight-mock-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+duckflight-extension-abi = { path = "../../crates/duckflight-extension-abi" }

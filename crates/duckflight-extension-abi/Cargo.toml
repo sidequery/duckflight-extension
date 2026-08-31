@@ -1,0 +1,11 @@
+[package]
+name = "duckflight-extension-abi"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Stable C ABI between the public DuckFlight DuckDB extension and a runtime provider"
+repository = "https://github.com/sidequery/duckflight-extension"
+publish = false
+
+[lib]
+path = "src/lib.rs"

@@ -1,0 +1,14 @@
+/target
+target
+build/
+configure/
+.duckflight-core/
+duckdb_unittest_tempdir/
+.idea/
+.DS_Store
+.agents/
+*.duckdb_extension
+*.dylib
+*.so
+*.dll
+*.log

@@ -1,0 +1,6 @@
+# platform sha256 immutable_url
+#
+# Add one checksum-pinned GitHub Release asset per supported DuckDB platform before producing a
+# production Community artifact. With no entries, `make release` builds the public stub artifact.
+# Example shape only (do not use a mutable `latest` URL):
+# osx_arm64 0123456789abcdef... https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.0/libduckflight_core_ffi-osx_arm64.dylib
