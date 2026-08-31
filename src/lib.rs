@@ -13,8 +13,6 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
-use subtle::ConstantTimeEq;
-
 mod dynamic_core;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -50,7 +48,7 @@ trait CoreRuntime: Send + Sync {
         &self,
         protocol: Protocol,
         address: &str,
-        users_file: &str,
+        config_file: &str,
     ) -> Result<String, Box<dyn Error>>;
 
     fn stop(&self, protocol: Protocol, address: &str) -> Result<bool, Box<dyn Error>>;
@@ -99,39 +97,11 @@ impl CoreRuntime for UnavailableCore {
 
 struct ExtensionState {
     core: Box<dyn CoreRuntime>,
-    management: ManagementCapability,
 }
 
 impl ExtensionState {
-    fn from_box(core: Box<dyn CoreRuntime>, management: ManagementCapability) -> Self {
-        Self { core, management }
-    }
-}
-
-struct ManagementCapability {
-    expected: Option<Box<[u8]>>,
-}
-
-impl ManagementCapability {
-    fn from_environment() -> Self {
-        let expected = std::env::var_os("DUCKFLIGHT_MANAGEMENT_TOKEN")
-            .and_then(|value| value.into_string().ok())
-            .filter(|value| !value.is_empty())
-            .map(String::into_bytes)
-            .map(Vec::into_boxed_slice);
-        Self { expected }
-    }
-
-    fn authorize(&self, supplied: &str) -> Result<(), Box<dyn Error>> {
-        let authorized = self
-            .expected
-            .as_deref()
-            .is_some_and(|expected| supplied.as_bytes().ct_eq(expected).unwrap_u8() == 1);
-        if authorized {
-            Ok(())
-        } else {
-            Err("DuckFlight management authorization failed".into())
-        }
+    fn from_box(core: Box<dyn CoreRuntime>) -> Self {
+        Self { core }
     }
 }
 
@@ -183,8 +153,7 @@ fn chunk_bounds(total: usize, start: usize, capacity: usize) -> Option<Range<usi
 #[derive(Clone)]
 struct ServeBindData {
     address: String,
-    users_file: String,
-    management_token: String,
+    config_file: String,
 }
 
 struct PgWireServe;
@@ -198,8 +167,7 @@ impl VTab for PgWireServe {
         bind.add_result_column("address", varchar());
         Ok(ServeBindData {
             address: bind.get_parameter(0).to_string(),
-            users_file: bind.get_parameter(1).to_string(),
-            management_token: bind.get_parameter(2).to_string(),
+            config_file: bind.get_parameter(1).to_string(),
         })
     }
 
@@ -216,13 +184,10 @@ impl VTab for PgWireServe {
             return Ok(());
         }
         let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
-        state
-            .management
-            .authorize(&info.get_bind_data().management_token)?;
         let address = state.core.start(
             Protocol::PgWire,
             &info.get_bind_data().address,
-            &info.get_bind_data().users_file,
+            &info.get_bind_data().config_file,
         )?;
         set_string(output, 0, 0, Protocol::PgWire.as_str())?;
         set_string(output, 1, 0, &address)?;
@@ -231,7 +196,7 @@ impl VTab for PgWireServe {
     }
 
     fn parameters() -> Option<Vec<LogicalTypeHandle>> {
-        Some(vec![varchar(), varchar(), varchar()])
+        Some(vec![varchar(), varchar()])
     }
 }
 
@@ -246,8 +211,7 @@ impl VTab for AdbcServe {
         bind.add_result_column("address", varchar());
         Ok(ServeBindData {
             address: bind.get_parameter(0).to_string(),
-            users_file: bind.get_parameter(1).to_string(),
-            management_token: bind.get_parameter(2).to_string(),
+            config_file: bind.get_parameter(1).to_string(),
         })
     }
 
@@ -264,13 +228,10 @@ impl VTab for AdbcServe {
             return Ok(());
         }
         let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
-        state
-            .management
-            .authorize(&info.get_bind_data().management_token)?;
         let address = state.core.start(
             Protocol::Adbc,
             &info.get_bind_data().address,
-            &info.get_bind_data().users_file,
+            &info.get_bind_data().config_file,
         )?;
         set_string(output, 0, 0, Protocol::Adbc.as_str())?;
         set_string(output, 1, 0, &address)?;
@@ -279,7 +240,7 @@ impl VTab for AdbcServe {
     }
 
     fn parameters() -> Option<Vec<LogicalTypeHandle>> {
-        Some(vec![varchar(), varchar(), varchar()])
+        Some(vec![varchar(), varchar()])
     }
 }
 
@@ -287,7 +248,6 @@ impl VTab for AdbcServe {
 struct StopBindData {
     protocol: String,
     address: String,
-    management_token: String,
 }
 
 struct StopServer;
@@ -301,7 +261,6 @@ impl VTab for StopServer {
         Ok(StopBindData {
             protocol: bind.get_parameter(0).to_string(),
             address: bind.get_parameter(1).to_string(),
-            management_token: bind.get_parameter(2).to_string(),
         })
     }
 
@@ -320,7 +279,6 @@ impl VTab for StopServer {
         let bind = info.get_bind_data();
         let protocol = Protocol::parse(&bind.protocol)?;
         let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
-        state.management.authorize(&bind.management_token)?;
         let status = if state.core.stop(protocol, &bind.address)? {
             format!("stopped {} server on {}", protocol.as_str(), bind.address)
         } else {
@@ -332,7 +290,7 @@ impl VTab for StopServer {
     }
 
     fn parameters() -> Option<Vec<LogicalTypeHandle>> {
-        Some(vec![varchar(), varchar(), varchar()])
+        Some(vec![varchar(), varchar()])
     }
 }
 
@@ -346,27 +304,18 @@ struct ServerListInit {
     offset: AtomicUsize,
 }
 
-#[derive(Clone)]
-struct ManagementBindData {
-    management_token: String,
-}
-
 impl VTab for ServerList {
     type InitData = ServerListInit;
-    type BindData = ManagementBindData;
+    type BindData = EmptyBindData;
 
     fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
         bind.add_result_column("protocol", varchar());
         bind.add_result_column("address", varchar());
-        Ok(ManagementBindData {
-            management_token: bind.get_parameter(0).to_string(),
-        })
+        Ok(EmptyBindData)
     }
 
     fn init(info: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
         let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
-        let bind = unsafe { &*info.get_bind_data::<ManagementBindData>() };
-        state.management.authorize(&bind.management_token)?;
         Ok(ServerListInit {
             snapshots: state.core.snapshots()?,
             offset: AtomicUsize::new(0),
@@ -393,7 +342,7 @@ impl VTab for ServerList {
     }
 
     fn parameters() -> Option<Vec<LogicalTypeHandle>> {
-        Some(vec![varchar()])
+        None
     }
 }
 
@@ -489,13 +438,7 @@ unsafe fn duckflight_init_c_api_internal(
                 )),
             },
         };
-        register_extension(
-            &connection,
-            Arc::new(ExtensionState::from_box(
-                core,
-                ManagementCapability::from_environment(),
-            )),
-        )?;
+        register_extension(&connection, Arc::new(ExtensionState::from_box(core)))?;
         Ok(true)
     }
 }
@@ -547,18 +490,6 @@ mod tests {
         assert!(!core.status().loaded);
         assert!(core.snapshots().unwrap().is_empty());
         assert!(core.start(Protocol::PgWire, "127.0.0.1:0", "").is_err());
-    }
-
-    #[test]
-    fn management_capability_fails_closed() {
-        let disabled = ManagementCapability { expected: None };
-        assert!(disabled.authorize("anything").is_err());
-
-        let enabled = ManagementCapability {
-            expected: Some(b"correct-token".to_vec().into_boxed_slice()),
-        };
-        assert!(enabled.authorize("correct-token").is_ok());
-        assert!(enabled.authorize("wrong-token").is_err());
     }
 
     #[test]

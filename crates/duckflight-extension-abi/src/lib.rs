@@ -118,7 +118,7 @@ pub type DuckflightCoreStartV1 = unsafe extern "C" fn(
     handle: DuckflightCoreHandle,
     protocol: DuckflightProtocol,
     address: DuckflightBytesV1,
-    users_file: DuckflightBytesV1,
+    config_file: DuckflightBytesV1,
     address_receiver: Option<DuckflightStringReceiverV1>,
     address_context: *mut c_void,
     error: *mut DuckflightOutputBufferV1,

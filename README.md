@@ -27,45 +27,59 @@ select * from duckflight_core_status();
 
 Development server operations return a clear error until a compatible runtime is available.
 
-Listener management is capability-protected. Set a non-empty token before DuckDB loads the
-extension and supply it to every lifecycle call:
+One `duckflight.toml` configures network authentication and the shared TLS identity. The repository
+includes a dependency-free PEP 723 helper so operators do not need to derive SCRAM fields or bearer
+token hashes manually:
 
 ```sh
-export DUCKFLIGHT_MANAGEMENT_TOKEN='a-long-random-operator-token'
+uv run scripts/duckflight_auth.py user add alice --file duckflight.toml
+uv run scripts/duckflight_auth.py token add airport --file duckflight.toml
+uv run scripts/duckflight_auth.py check --file duckflight.toml
 ```
+
+The token command creates a read/query plus transaction-management token by default (the minimum
+Airport needs for reads), prints the raw value once, and stores only its SHA-256 digest. The config still
+contains password-verification material and authentication policy, so handle it as a secret: do not
+commit it, publish it in release assets, or bake it into container images. The default root file is
+ignored by this repository. See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) for the complete
+schema, transport policy, Airport setup, storage, and rotation guidance.
 
 ## SQL API
 
 ```sql
 -- PostgreSQL wire protocol
 select * from duckflight_pg_serve(
-  '127.0.0.1:5433', '/path/to/users.toml', 'a-long-random-operator-token'
+  '127.0.0.1:5433', '/path/to/duckflight.toml'
 );
 
 -- Arrow Flight SQL / ADBC
 select * from duckflight_adbc_serve(
-  '127.0.0.1:31337', '/path/to/users.toml', 'a-long-random-operator-token'
+  '127.0.0.1:31337', '/path/to/duckflight.toml'
 );
 
 -- Current servers
-select * from duckflight_servers('a-long-random-operator-token');
+select * from duckflight_servers();
 
 -- Protocol aliases include pgwire/postgres/postgresql and adbc/flight/flightsql/flight_sql.
 select * from duckflight_stop(
-  'pgwire', '127.0.0.1:5433', 'a-long-random-operator-token'
+  'pgwire', '127.0.0.1:5433'
 );
 ```
 
 | Function | Result | Purpose |
 | --- | --- | --- |
 | `duckflight_core_status()` | `loaded`, `abi_version`, `detail` | Inspect runtime availability |
-| `duckflight_pg_serve(address, users_file, management_token)` | `protocol`, `address` | Start PostgreSQL wire protocol |
-| `duckflight_adbc_serve(address, users_file, management_token)` | `protocol`, `address` | Start Arrow Flight SQL |
-| `duckflight_servers(management_token)` | `protocol`, `address` | List active endpoints |
-| `duckflight_stop(protocol, address, management_token)` | `status` | Stop an endpoint |
+| `duckflight_pg_serve(address, config_file)` | `protocol`, `address` | Start PostgreSQL wire protocol |
+| `duckflight_adbc_serve(address, config_file)` | `protocol`, `address` | Start Arrow Flight SQL |
+| `duckflight_servers()` | `protocol`, `address` | List active endpoints |
+| `duckflight_stop(protocol, address)` | `status` | Stop an endpoint |
 
-The Flight SQL endpoint is compatible with ADBC Flight SQL clients. It can also be reached through
-DuckDB's Airport extension when Airport is configured against the Flight endpoint.
+Both listeners require authentication. Plaintext transport is allowed only when the actual bound
+address is loopback; any non-loopback bind refuses to start without the shared `[tls]` certificate
+and key. PgWire clients use SCRAM-SHA-256. ADBC Flight SQL clients use the standard username/password
+handshake over TLS and receive a bounded session bearer. Airport does not perform that handshake,
+so it uses a generated token through DuckDB's Secrets Manager. The exact client setup is documented
+in [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md).
 
 ## Build and test
 
@@ -116,9 +130,9 @@ Release asset and its exact URL and SHA-256 must be added to `core-assets.lock`.
 ## Security
 
 The bundled core executes native code in the DuckDB process. Release inputs must be immutable and
-checksum-verified. Keep `DUCKFLIGHT_MANAGEMENT_TOKEN` out of shared SQL history and logs, and bind
-server endpoints to loopback unless they are intentionally protected and exposed. See
-[SECURITY.md](SECURITY.md) for reporting guidance.
+checksum-verified. SQL callers are trusted to manage DuckFlight listeners, just as they are trusted
+to operate the DuckDB instance. The core rejects non-loopback listeners without TLS and rejects
+listeners with no authentication method. See [SECURITY.md](SECURITY.md) for reporting guidance.
 
 ## License
 

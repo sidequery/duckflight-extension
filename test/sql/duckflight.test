@@ -7,56 +7,35 @@ select loaded::varchar, abi_version::varchar from duckflight_core_status();
 true	1
 
 query TT
-select * from duckflight_servers('duckflight-test-management');
+select * from duckflight_servers();
 ----
-
-statement error
-select * from duckflight_servers('wrong-token');
-----
-Invalid Input Error: DuckFlight management authorization failed
-
-statement error
-select * from duckflight_pg_serve('127.0.0.1:15433', '', 'wrong-token');
-----
-Invalid Input Error: DuckFlight management authorization failed
 
 query TT
-select * from duckflight_pg_serve('127.0.0.1:0', '', 'duckflight-test-management');
+select * from duckflight_pg_serve('127.0.0.1:0', '');
 ----
 pgwire	127.0.0.1:15432
 
 query TT
-select * from duckflight_adbc_serve('127.0.0.1:0', '', 'duckflight-test-management');
+select * from duckflight_adbc_serve('127.0.0.1:0', '');
 ----
 adbc	127.0.0.1:15051
 
 query TT rowsort
-select * from duckflight_servers('duckflight-test-management');
-----
-adbc	127.0.0.1:15051
-pgwire	127.0.0.1:15432
-
-statement error
-select * from duckflight_stop('postgresql', '127.0.0.1:15432', 'wrong-token');
-----
-Invalid Input Error: DuckFlight management authorization failed
-
-query TT rowsort
-select * from duckflight_servers('duckflight-test-management');
+select * from duckflight_servers();
 ----
 adbc	127.0.0.1:15051
 pgwire	127.0.0.1:15432
 
 query T
-select * from duckflight_stop('postgresql', '127.0.0.1:15432', 'duckflight-test-management');
+select * from duckflight_stop('postgresql', '127.0.0.1:15432');
 ----
 stopped pgwire server on 127.0.0.1:15432
 
 query T
-select * from duckflight_stop('flight_sql', '127.0.0.1:15051', 'duckflight-test-management');
+select * from duckflight_stop('flight_sql', '127.0.0.1:15051');
 ----
 stopped adbc server on 127.0.0.1:15051
 
 query TT
-select * from duckflight_servers('duckflight-test-management');
+select * from duckflight_servers();
 ----

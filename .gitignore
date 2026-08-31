@@ -12,3 +12,8 @@ duckdb_unittest_tempdir/
 *.so
 *.dll
 *.log
+__pycache__/
+*.py[cod]
+.ruff_cache/
+/users.toml
+/duckflight.toml

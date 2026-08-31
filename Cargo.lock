@@ -448,7 +448,6 @@ dependencies = [
  "duckdb",
  "duckflight-extension-abi",
  "libloading",
- "subtle",
  "tempfile",
 ]
 

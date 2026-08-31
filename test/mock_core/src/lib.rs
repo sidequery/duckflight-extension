@@ -148,7 +148,7 @@ unsafe extern "C" fn start(
     handle: DuckflightCoreHandle,
     protocol: DuckflightProtocol,
     address: DuckflightBytesV1,
-    users_file: DuckflightBytesV1,
+    config_file: DuckflightBytesV1,
     receiver: Option<DuckflightStringReceiverV1>,
     context: *mut c_void,
     error: *mut DuckflightOutputBufferV1,
@@ -158,7 +158,7 @@ unsafe extern "C" fn start(
             let core = handle_ref(handle)?;
             validate_protocol(protocol)?;
             let address = borrowed_str(address, "address")?;
-            let _ = borrowed_str(users_file, "users_file")?;
+            let _ = borrowed_str(config_file, "config_file")?;
             let receiver = receiver.ok_or_else(|| "address receiver is required".to_string())?;
             let actual = bound_address(protocol, address);
             let mut servers = core.servers.lock().map_err(|error| error.to_string())?;

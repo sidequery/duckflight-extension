@@ -18,7 +18,6 @@ endif
 endif
 
 export DUCKFLIGHT_CORE_PATH := $(abspath $(MOCK_CORE_LIBRARY))
-export DUCKFLIGHT_MANAGEMENT_TOKEN := duckflight-test-management
 
 all: configure debug
 

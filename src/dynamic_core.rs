@@ -185,7 +185,7 @@ impl CoreRuntime for DynamicCore {
         &self,
         protocol: Protocol,
         address: &str,
-        users_file: &str,
+        config_file: &str,
     ) -> Result<String, Box<dyn Error>> {
         unsafe extern "C" fn receive(
             context: *mut c_void,
@@ -207,7 +207,7 @@ impl CoreRuntime for DynamicCore {
                 self.handle,
                 abi_protocol(protocol),
                 DuckflightBytesV1::from_utf8(address),
-                DuckflightBytesV1::from_utf8(users_file),
+                DuckflightBytesV1::from_utf8(config_file),
                 Some(receive),
                 (&mut output as *mut Result<String, String>).cast(),
                 error.as_ffi(),

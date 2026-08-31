@@ -10,6 +10,7 @@ cargo fmt --all -- --check
 cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+uv run test/test_duckflight_auth.py
 make configure
 make test_debug
 ```

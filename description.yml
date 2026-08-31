@@ -22,5 +22,5 @@ docs:
   extended_description: |
     DuckFlight exposes PostgreSQL wire-protocol and Arrow Flight SQL servers backed by the exact
     DuckDB database that loaded this extension. Production artifacts embed the platform-specific
-    DuckFlight core into the extension, so INSTALL and LOAD require no sidecar download. Lifecycle
-    functions require the operator capability configured through DUCKFLIGHT_MANAGEMENT_TOKEN.
+    DuckFlight core into the extension, so INSTALL and LOAD require no sidecar download. Network
+    clients authenticate through the configured authentication and TLS file.

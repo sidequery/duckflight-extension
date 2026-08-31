@@ -58,9 +58,9 @@ fi
 
 # Rust file names are observable through panic and tracing metadata even in stripped binaries.
 # Remap the private checkout root before compiling a distributable core payload.
-core_rustflags="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${core_repo}=${core_remap_prefix} --remap-path-prefix=${user_home}=/build/home"
-core_cflags="${CFLAGS:+${CFLAGS} }-ffile-prefix-map=${core_repo}=${core_remap_prefix} -fdebug-prefix-map=${core_repo}=${core_remap_prefix} -ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home"
-core_cxxflags="${CXXFLAGS:+${CXXFLAGS} }-ffile-prefix-map=${core_repo}=${core_remap_prefix} -fdebug-prefix-map=${core_repo}=${core_remap_prefix} -ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home"
+core_rustflags="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${user_home}=/build/home --remap-path-prefix=${core_repo}=${core_remap_prefix}"
+core_cflags="${CFLAGS:+${CFLAGS} }-ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home -ffile-prefix-map=${core_repo}=${core_remap_prefix} -fdebug-prefix-map=${core_repo}=${core_remap_prefix}"
+core_cxxflags="${CXXFLAGS:+${CXXFLAGS} }-ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home -ffile-prefix-map=${core_repo}=${core_remap_prefix} -fdebug-prefix-map=${core_repo}=${core_remap_prefix}"
 
 RUSTFLAGS="${core_rustflags}" CFLAGS="${core_cflags}" CXXFLAGS="${core_cxxflags}" "${cargo_build[@]}" \
   --manifest-path "${core_manifest}" \
@@ -94,12 +94,12 @@ if [[ "${target_triple}" == *apple-darwin ]]; then
   install_name_tool -id "@rpath/libduckflight_core_ffi.dylib" "${core_library}"
 fi
 
-public_rustflags="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${public_repo}=/src/duckflight-extension --remap-path-prefix=${user_home}=/build/home"
+public_rustflags="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${user_home}=/build/home --remap-path-prefix=${public_repo}=/src/duckflight-extension"
 if [[ "${target_triple}" == *apple-darwin ]]; then
   public_rustflags="${public_rustflags} -C link-arg=-Wl,-install_name,@rpath/duckflight.duckdb_extension"
 fi
-public_cflags="${CFLAGS:+${CFLAGS} }-ffile-prefix-map=${public_repo}=/src/duckflight-extension -fdebug-prefix-map=${public_repo}=/src/duckflight-extension -ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home"
-public_cxxflags="${CXXFLAGS:+${CXXFLAGS} }-ffile-prefix-map=${public_repo}=/src/duckflight-extension -fdebug-prefix-map=${public_repo}=/src/duckflight-extension -ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home"
+public_cflags="${CFLAGS:+${CFLAGS} }-ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home -ffile-prefix-map=${public_repo}=/src/duckflight-extension -fdebug-prefix-map=${public_repo}=/src/duckflight-extension"
+public_cxxflags="${CXXFLAGS:+${CXXFLAGS} }-ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home -ffile-prefix-map=${public_repo}=/src/duckflight-extension -fdebug-prefix-map=${public_repo}=/src/duckflight-extension"
 
 RUSTFLAGS="${public_rustflags}" CFLAGS="${public_cflags}" CXXFLAGS="${public_cxxflags}" \
   DUCKFLIGHT_CORE_BUNDLE_PATH="${core_library}" make release
@@ -109,5 +109,11 @@ for artifact in "${core_library}" build/release/duckflight.duckdb_extension; do
     echo "release-builder home path remains in ${artifact}: ${user_home}" >&2
     exit 1
   fi
+  for forbidden_fragment in ".codex" "worktrees"; do
+    if strings "${artifact}" | grep -F "${forbidden_fragment}" >/dev/null; then
+      echo "private checkout metadata remains in ${artifact}: ${forbidden_fragment}" >&2
+      exit 1
+    fi
+  done
 done
 echo "bundled extension: build/release/duckflight.duckdb_extension"
