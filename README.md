@@ -1,6 +1,6 @@
 # DuckFlight DuckDB extension
 
-DuckFlight lets PostgreSQL and Arrow clients query DuckDB directly. Load the extension, start a
+DuckFlight lets PostgreSQL and Arrow flight clients query DuckDB directly. Load the extension, start a
 listener, then connect with `psql`, a PostgreSQL driver, an ADBC Flight SQL client, or DuckDB's
 Airport extension. Every client queries the same DuckDB database—there is no second database to run
 and no data to copy.
