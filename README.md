@@ -1,8 +1,9 @@
 # DuckFlight DuckDB extension
 
-DuckFlight turns a DuckDB database into a PostgreSQL and Arrow Flight SQL server. Query the same
-tables and views from PostgreSQL clients, ADBC applications, or DuckDB's Airport extension without
-copying the data into a separate database.
+DuckFlight lets PostgreSQL and Arrow clients query DuckDB directly. Load the extension, start a
+listener, then connect with `psql`, a PostgreSQL driver, an ADBC Flight SQL client, or DuckDB's
+Airport extension. Every client queries the same DuckDB database—there is no second database to run
+and no data to copy.
 
 ## Authentication setup
 
@@ -102,24 +103,22 @@ asset model. The platform payloads are published in the
 [`core-v0.1.0` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.0)
 and checksum-pinned in `core-assets.lock`.
 
-## Development runtime
+<details>
+<summary>Developing without a bundled core</summary>
 
-Production extensions contain everything required at runtime. The public source tree can also build
-without the core for development and CI. Such builds load an ABI-compatible core dynamically:
+Production extensions are self-contained. For public-source development and CI, an unbundled build
+can instead load an ABI-compatible core from `DUCKFLIGHT_CORE_PATH`:
 
 ```sh
 export DUCKFLIGHT_CORE_PATH=/absolute/path/to/libduckflight_core_ffi.dylib
 duckdb
 ```
 
-Use `.so` on Linux and `.dll` on Windows. Without a compatible core, `LOAD duckflight` still permits
-metadata inspection while server operations return an availability error. Check the current state
-with:
+Use `.so` on Linux. Without a compatible core, `LOAD duckflight` still permits metadata inspection
+while server operations return an availability error. Inspect the state with
+`select * from duckflight_core_status();`.
 
-```sql
-load duckflight;
-select * from duckflight_core_status();
-```
+</details>
 
 ## Community Extension status
 
