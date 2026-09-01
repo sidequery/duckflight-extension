@@ -5,6 +5,34 @@ listener, then connect with `psql`, a PostgreSQL driver, an ADBC Flight SQL clie
 Airport extension. Every client queries the same DuckDB database—there is no second database to run
 and no data to copy.
 
+## Install and load
+
+Until DuckFlight is available from DuckDB's Community Extensions repository, download the artifact
+for your platform from the [latest release](https://github.com/sidequery/duckflight-extension/releases/latest).
+The release artifacts are built for DuckDB v1.5.5 and are not signed by DuckDB, so start the CLI
+with unsigned extensions enabled and load the downloaded file by its absolute path:
+
+```sh
+duckdb -unsigned
+```
+
+```sql
+load '/absolute/path/to/duckflight-v1.5.5-osx_arm64.duckdb_extension';
+select * from duckflight_core_status();
+```
+
+Choose the asset matching `linux_amd64`, `linux_arm64`, `osx_amd64`, or `osx_arm64`. The
+`-unsigned` flag weakens DuckDB's extension-signature protection for that process, so use it only
+with an artifact downloaded from this repository's releases and verify the release checksum when
+moving it through another system.
+
+Once DuckFlight is published by DuckDB Community Extensions, the signed installation path will be:
+
+```sql
+install duckflight from community;
+load duckflight;
+```
+
 ## Authentication setup
 
 One `duckflight.toml` configures network authentication and the shared TLS identity. The repository
