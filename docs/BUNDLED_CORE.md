@@ -27,7 +27,7 @@ build must download the exact platform library before Cargo runs, verify it, and
 single `.duckdb_extension`; there is no runtime download or sidecar installation. Do not use a
 `latest` URL.
 
-`core-assets.lock` pins the four Linux and macOS `core-v0.1.0` payloads used by the standard
+`core-assets.lock` pins the four Linux and macOS `core-v0.1.1` payloads used by the standard
 `make release` invoked by DuckDB's reusable CI. The downloaded library stays under the ignored
 `build/` tree and is embedded into the final extension; it is never committed or installed on the
 user's machine as a sidecar. Release smoke tests load that embedded production core. Mock lifecycle
