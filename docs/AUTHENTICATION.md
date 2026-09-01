@@ -4,7 +4,7 @@ Both extension listeners take the path to one `duckflight.toml` file:
 
 ```sql
 select * from duckflight_pg_serve('127.0.0.1:5433', '/run/secrets/duckflight.toml');
-select * from duckflight_adbc_serve('127.0.0.1:31337', '/run/secrets/duckflight.toml');
+select * from duckflight_flight_serve('127.0.0.1:31337', '/run/secrets/duckflight.toml');
 ```
 
 Existing users-only TOML files remain valid. The same file may additionally contain generated

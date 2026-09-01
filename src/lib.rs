@@ -18,21 +18,21 @@ mod dynamic_core;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Protocol {
     PgWire,
-    Adbc,
+    FlightSql,
 }
 
 impl Protocol {
     fn as_str(self) -> &'static str {
         match self {
             Self::PgWire => "pgwire",
-            Self::Adbc => "adbc",
+            Self::FlightSql => "flight",
         }
     }
 
     fn parse(raw: &str) -> Result<Self, Box<dyn Error>> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "pgwire" | "postgres" | "postgresql" => Ok(Self::PgWire),
-            "adbc" | "flight" | "flightsql" | "flight_sql" => Ok(Self::Adbc),
+            "flight" => Ok(Self::FlightSql),
             other => Err(format!("unsupported DuckFlight extension protocol: {other}").into()),
         }
     }
@@ -200,9 +200,9 @@ impl VTab for PgWireServe {
     }
 }
 
-struct AdbcServe;
+struct FlightSqlServe;
 
-impl VTab for AdbcServe {
+impl VTab for FlightSqlServe {
     type InitData = EmitOnce;
     type BindData = ServeBindData;
 
@@ -229,11 +229,11 @@ impl VTab for AdbcServe {
         }
         let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
         let address = state.core.start(
-            Protocol::Adbc,
+            Protocol::FlightSql,
             &info.get_bind_data().address,
             &info.get_bind_data().config_file,
         )?;
-        set_string(output, 0, 0, Protocol::Adbc.as_str())?;
+        set_string(output, 0, 0, Protocol::FlightSql.as_str())?;
         set_string(output, 1, 0, &address)?;
         output.set_len(1);
         Ok(())
@@ -389,8 +389,10 @@ fn register_extension(
 ) -> DuckResult<(), Box<dyn Error>> {
     connection
         .register_table_function_with_extra_info::<PgWireServe, _>("duckflight_pg_serve", &state)?;
-    connection
-        .register_table_function_with_extra_info::<AdbcServe, _>("duckflight_adbc_serve", &state)?;
+    connection.register_table_function_with_extra_info::<FlightSqlServe, _>(
+        "duckflight_flight_serve",
+        &state,
+    )?;
     connection
         .register_table_function_with_extra_info::<StopServer, _>("duckflight_stop", &state)?;
     connection
@@ -478,9 +480,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn protocol_aliases_are_supported() {
+    fn protocol_names_are_supported() {
         assert_eq!(Protocol::parse("postgresql").unwrap(), Protocol::PgWire);
-        assert_eq!(Protocol::parse("flight_sql").unwrap(), Protocol::Adbc);
+        assert_eq!(Protocol::parse("flight").unwrap(), Protocol::FlightSql);
+        assert!(Protocol::parse("flight_sql").is_err());
+        assert!(Protocol::parse("adbc").is_err());
         assert!(Protocol::parse("http").is_err());
     }
 

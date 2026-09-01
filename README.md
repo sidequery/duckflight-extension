@@ -60,17 +60,17 @@ select * from duckflight_pg_serve(
   '127.0.0.1:5433', '/path/to/duckflight.toml'
 );
 
--- Arrow Flight SQL / ADBC
-select * from duckflight_adbc_serve(
+-- Arrow Flight SQL
+select * from duckflight_flight_serve(
   '127.0.0.1:31337', '/path/to/duckflight.toml'
 );
 
 -- Current servers
 select * from duckflight_servers();
 
--- Protocol aliases include pgwire/postgres/postgresql and adbc/flight/flightsql/flight_sql.
+-- Stop the Flight SQL listener.
 select * from duckflight_stop(
-  'pgwire', '127.0.0.1:5433'
+  'flight', '127.0.0.1:31337'
 );
 ```
 
@@ -78,7 +78,7 @@ select * from duckflight_stop(
 | --- | --- | --- |
 | `duckflight_core_status()` | `loaded`, `abi_version`, `detail` | Inspect runtime availability |
 | `duckflight_pg_serve(address, config_file)` | `protocol`, `address` | Start PostgreSQL wire protocol |
-| `duckflight_adbc_serve(address, config_file)` | `protocol`, `address` | Start Arrow Flight SQL |
+| `duckflight_flight_serve(address, config_file)` | `protocol`, `address` | Start Arrow Flight SQL |
 | `duckflight_servers()` | `protocol`, `address` | List active endpoints |
 | `duckflight_stop(protocol, address)` | `status` | Stop an endpoint |
 

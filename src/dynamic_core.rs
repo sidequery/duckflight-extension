@@ -282,14 +282,14 @@ impl CoreRuntime for DynamicCore {
 fn abi_protocol(protocol: Protocol) -> DuckflightProtocol {
     match protocol {
         Protocol::PgWire => DuckflightProtocol::PGWIRE,
-        Protocol::Adbc => DuckflightProtocol::FLIGHT_SQL,
+        Protocol::FlightSql => DuckflightProtocol::FLIGHT_SQL,
     }
 }
 
 fn protocol_name(protocol: DuckflightProtocol) -> Result<String, String> {
     match protocol {
         DuckflightProtocol::PGWIRE => Ok("pgwire".into()),
-        DuckflightProtocol::FLIGHT_SQL => Ok("adbc".into()),
+        DuckflightProtocol::FLIGHT_SQL => Ok("flight".into()),
         other => Err(format!("runtime returned unsupported protocol {}", other.0)),
     }
 }
