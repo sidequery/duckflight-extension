@@ -1,7 +1,7 @@
 extension:
   name: duckflight
   description: Query DuckDB from PostgreSQL and Arrow Flight SQL clients, including psql, ADBC, and Airport
-  version: 0.1.2
+  version: 0.1.3
   language: Rust
   build: cargo
   license: MIT
