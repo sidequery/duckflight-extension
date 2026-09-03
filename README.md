@@ -7,14 +7,28 @@ no data to export or copy.
 
 ## Install and load
 
-Until DuckFlight is available from DuckDB's Community Extensions repository, download the artifact
-for your platform from the [latest release](https://github.com/sidequery/duckflight-extension/releases/latest).
-The release artifacts are built for DuckDB v1.5.5 and are not signed by DuckDB, so start the CLI
-with unsigned extensions enabled and load the downloaded file by its absolute path:
+Install the signed extension directly from DuckDB Community Extensions:
+
+```sql
+install duckflight from community;
+load duckflight;
+```
+
+DuckDB downloads the build matching your DuckDB version and platform. DuckFlight currently supports
+Linux and macOS on amd64 and arm64.
+
+<details>
+<summary>Load an unsigned artifact from GitHub Releases</summary>
+
+Download the artifact for your platform from the
+[latest release](https://github.com/sidequery/duckflight-extension/releases/latest). Release
+artifacts are not signed by DuckDB, so start the CLI with unsigned extensions enabled:
 
 ```sh
 duckdb -unsigned
 ```
+
+Then load the downloaded file by its absolute path:
 
 ```sql
 load '/absolute/path/to/duckflight-v1.5.5-osx_arm64.duckdb_extension';
@@ -23,15 +37,10 @@ select * from duckflight_core_status();
 
 Choose the asset matching `linux_amd64`, `linux_arm64`, `osx_amd64`, or `osx_arm64`. The
 `-unsigned` flag weakens DuckDB's extension-signature protection for that process, so use it only
-with an artifact downloaded from this repository's releases and verify the release checksum when
-moving it through another system.
+with an artifact downloaded from this repository's releases and verify its checksum when moving it
+through another system.
 
-Once DuckFlight is published by DuckDB Community Extensions, the signed installation path will be:
-
-```sql
-install duckflight from community;
-load duckflight;
-```
+</details>
 
 ## Authentication setup
 
@@ -147,14 +156,6 @@ while server operations return an availability error. Inspect the state with
 `select * from duckflight_core_status();`.
 
 </details>
-
-## Community Extension status
-
-This repository is structured for DuckDB Community Extension CI and includes a provisional
-`description.yml`. Before an upstream submission, `repo.ref` must identify the public commit to be
-built. There is no separately installed runtime: each immutable platform core library is a GitHub
-Release asset pinned by exact URL and SHA-256 in `core-assets.lock`. The mandated `make release`
-entrypoint fetches, verifies, and embeds it during the build.
 
 ## Security
 
