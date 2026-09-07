@@ -37,4 +37,4 @@ docs:
 
     Both listeners require authentication. A single `duckflight.toml` configures users, access
     tokens, and optional TLS. See the
-    [quick start and authentication guide](https://github.com/sidequery/duckflight-extension/blob/main/docs/AUTHENTICATION.md).
+    [quick start and authentication guide](https://github.com/sidequery/duckflight-extension/blob/main/README.md#authentication-setup).

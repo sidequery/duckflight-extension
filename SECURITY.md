@@ -13,7 +13,7 @@ Only the latest released extension version is supported with security fixes.
 Treat `duckflight.toml` as secret credential material even though it stores SCRAM verifiers and
 bearer-token hashes rather than plaintext credentials. Never include it in reports, issues,
 repository commits, release assets, or support bundles. See
-[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) for storage, permissions, rotation, and
+[README authentication section](README.md#authentication-setup) for storage, permissions, rotation, and
 exposure-response guidance.
 
 DuckFlight assumes SQL callers in the DuckDB process are trusted to start, list, and stop listeners.
