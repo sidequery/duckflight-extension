@@ -89,10 +89,59 @@ columns, and types. PgWire applies SQL compatibility rewrites on top of those ob
 That rewriting is part of the PostgreSQL protocol path: running SQL directly in the host DuckDB
 does not pass through it. Flight SQL exposes metadata through its own protocol methods.
 
-Internal `duckflight_*` macros and catalog views support these paths, including session identity
-and database visibility. They are implementation helpers rather than additional server-control
-functions. Prefer ordinary DuckDB catalog functions locally and your client's metadata APIs
-remotely; internal helper names do not imply the same session behavior in every connection.
+## DuckFlight session and diagnostic utilities
+
+The core also adds the following `duckflight_*` macros. Scalar macros go in the select list;
+table macros are queried with `select * from ...`.
+
+| Function | Result | Purpose in a PgWire session |
+| --- | --- | --- |
+| `duckflight_current_user()` | varchar | User associated with the client session |
+| `duckflight_current_database()` | varchar | Client-facing database name, which can differ from the underlying DuckDB catalog |
+| `duckflight_visible_database()` | varchar | Underlying DuckDB database selected for catalog visibility |
+| `duckflight_session_pid()` | integer | PgWire backend/session identifier, not the host operating-system process ID |
+| `duckflight_runtime_databases()` | Table with `datname` | Distinct database names represented in tracked PgWire sessions, not all attached databases |
+| `duckflight_pg_stat_activity()` | Table with session and query metadata | Inspect tracked PgWire sessions, including `pid`, `datname`, `usename`, `application_name`, `state`, and `query` |
+| `duckflight_pg_stat_ssl()` | Table with TLS metadata | Inspect `pid` and `ssl` for sessions belonging to the current user |
+| `duckflight_database_oid(name)` | unsigned integer | Generate the database identifier used by the PostgreSQL compatibility catalogs |
+
+Run these diagnostics through a PostgreSQL client connected to DuckFlight:
+
+```sql
+select duckflight_current_user(),
+       duckflight_current_database(),
+       duckflight_visible_database(),
+       duckflight_session_pid();
+
+select * from duckflight_runtime_databases();
+
+select pid, datname, usename, application_name, state, query
+from duckflight_pg_stat_activity();
+
+select pid, ssl from duckflight_pg_stat_ssl();
+
+select duckflight_database_oid(duckflight_current_database());
+```
+
+PgWire installs connection-local identity values and runtime snapshots for these helpers.
+They describe PgWire sessions, not Flight SQL clients or every connection in the host process.
+For activity rows belonging to other users, query text is `<insufficient privilege>` and details
+such as state, client address, and timestamps are null. The SSL table includes only the current
+user's sessions; TLS version, cipher, and certificate-detail columns are currently null.
+
+Direct calls in the loading DuckDB connection do not receive that PgWire session context. The
+bootstrap defaults are `duckflight` for the current user and current database, `memory` for the
+visible database, `0` for the session PID, and empty tables for runtime databases, activity, and
+SSL. These are placeholders, not measurements of the host connection. Do not treat them as
+Flight SQL session diagnostics either.
+
+`duckflight_database_oid(name)` is a catalog compatibility helper, not a persistent application
+identifier: it assigns `1`, `2`, and `3` to `postgres`, `template0`, and `template1`, respectively,
+and derives other values from DuckDB's hash of the name. Do not rely on those derived values as
+collision-free identifiers or stable IDs across DuckDB versions.
+
+Other core utilities can belong to a different runtime. For example, `sidequery_files()` is
+registered for cloud-runner requests; loading this extension does not register it.
 
 ## Discover functions in your installed build
 
