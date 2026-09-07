@@ -457,7 +457,5 @@ listeners with no authentication method. See [SECURITY.md](SECURITY.md) for repo
 
 ## License
 
-The extension shim, ABI crate, and test mock in this repository are available under the MIT License.
-The private core source license is independent. Production release assets must carry an explicit
-binary license grant from the core copyright holder that is compatible with the extension's MIT
-metadata; the core owner can dual-license the binary without publishing its private source.
+This extension is licensed under the [MIT License](LICENSE). Sidequery also licenses the bundled
+core binaries under MIT; the core source code remains private and is not covered by that license.
