@@ -91,6 +91,10 @@ select * from duckflight_stop(
 | `duckflight_servers()` | `protocol`, `address` | List active endpoints |
 | `duckflight_stop(protocol, address)` | `status` | Stop an endpoint |
 
+The bundled core also provides PostgreSQL compatibility macros for common string, numeric,
+array, JSON, and date/time operations, plus catalog metadata for client tools. See the
+[SQL function guide](docs/SQL_FUNCTIONS.md) for examples, function discovery, and compatibility limits.
+
 Both listeners require authentication. Plaintext transport is allowed only when the actual bound
 address is loopback; any non-loopback bind refuses to start without the shared `[tls]` certificate
 and key. PgWire clients use SCRAM-SHA-256. ADBC Flight SQL clients use the standard username/password
