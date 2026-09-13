@@ -24,6 +24,54 @@ load duckflight;
 DuckDB downloads the build matching your DuckDB version and platform. DuckFlight currently supports
 Linux and macOS on amd64 and arm64.
 
+### DuckDB 2.0 alpha (Sidequery repository)
+
+Sidequery publishes signed alpha builds at
+`https://extensions.sidequery.dev`. DuckFlight `0.1.5-alpha` is available for
+**macOS Apple Silicon (`osx_arm64`)** on DuckDB `v2.0.0-alpha41489` and
+`v2.0.0-alpha41533`. Use **alpha41489** for the setup below. You can check your
+DuckDB version with `pragma version;`.
+
+In the matching DuckDB CLI, enable custom repositories and register Sidequery:
+
+```sql
+set allow_extension_repositories = 'allowed';
+create extension repository sidequery
+    with prefix 'https://extensions.sidequery.dev';
+
+install duckflight from sidequery;
+load duckflight from sidequery;
+select * from duckflight_core_status();
+```
+
+The core status reports `loaded = true` when ready. See
+[authentication setup](#authentication-setup) and the [SQL API](#sql-api) to start listeners.
+
+DuckDB automatically installs `httpfs` for HTTPS repository access. If its download
+returns 404 on a newer alpha, use alpha41489 or wait for that alpha's upstream
+extensions to be published.
+
+<details>
+<summary>Verify the repository signing key</summary>
+
+To inspect the repository's public-key fingerprint:
+
+```sql
+select repository_name, prefix, key_fingerprints
+from duckdb_extension_repositories()
+where repository_name = 'sidequery';
+```
+
+Sidequery's fingerprint is:
+
+```text
+sha256:3913381c7400db553886bcf98a0f5dddaed632a3502e8cf618d40ecabc4ee24d
+```
+
+</details>
+
+### GitHub release artifacts
+
 <details>
 <summary>Load an unsigned artifact from GitHub Releases</summary>
 
