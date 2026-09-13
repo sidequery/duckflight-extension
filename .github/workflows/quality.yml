@@ -39,3 +39,8 @@ jobs:
           uv run --with ruff ruff check scripts/duckflight_auth.py test/test_duckflight_auth.py
           uv run --with ruff ruff format --check scripts/duckflight_auth.py test/test_duckflight_auth.py
           uv run test/test_duckflight_auth.py
+      - name: Extension repository signing tests
+        run: |
+          uv run --with ruff ruff check scripts/extension_repository.py test/test_extension_repository.py test/test_alpha_duckflight.py
+          uv run --with ruff ruff format --check scripts/extension_repository.py test/test_extension_repository.py test/test_alpha_duckflight.py
+          uv run test/test_extension_repository.py

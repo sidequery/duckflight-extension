@@ -24,6 +24,11 @@ load duckflight;
 DuckDB downloads the build matching your DuckDB version and platform. DuckFlight currently supports
 Linux and macOS on amd64 and arm64.
 
+An independently signed repository for DuckDB 2.0 alpha is available at
+`https://extensions.sidequery.dev`. The tested installation target is
+`v2.0.0-alpha41489` on macOS arm64. See
+[signed repository installation and release instructions](docs/EXTENSION_REPOSITORY.md).
+
 <details>
 <summary>Load an unsigned artifact from GitHub Releases</summary>
 

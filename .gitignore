@@ -15,5 +15,6 @@ duckdb_unittest_tempdir/
 __pycache__/
 *.py[cod]
 .ruff_cache/
+.wrangler/
 /users.toml
 /duckflight.toml
