@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "duckflight"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "duckdb",
  "duckflight-extension-abi",
