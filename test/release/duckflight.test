@@ -7,3 +7,30 @@ query TT
 select loaded::varchar, abi_version::varchar from duckflight_core_status();
 ----
 true	1
+
+# The bundled core owns the compatibility definitions and their catalog comments.
+query I
+select count(*) from duckdb_functions()
+where function_type in ('macro', 'table_macro')
+  and (comment like 'PostgreSQL compatibility:%' or comment like 'Internal %');
+----
+37
+
+query T
+select comment from duckdb_functions()
+where function_name = 'quote_nullable' and function_type = 'macro';
+----
+PostgreSQL compatibility: Quotes a value as an SQL literal or returns the text NULL.
+
+query TII
+select quote_nullable(null), cardinality([1, 2, 3]), div(7, 2);
+----
+NULL	3	3
+
+query I
+select count(*) from duckdb_functions()
+where function_type = 'table' and function_name in
+  ('duckflight_pg_serve', 'duckflight_flight_serve', 'duckflight_stop',
+   'duckflight_servers', 'duckflight_core_status');
+----
+5

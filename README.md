@@ -151,6 +151,20 @@ The core bootstraps SQL macros in the host database for PostgreSQL-style queries
 compatibility. These are representative helpers, not an exhaustive PostgreSQL function catalog.
 Some names also have native DuckDB overloads; inspect the installed signatures when in doubt.
 
+The core supplies catalog comments alongside its PostgreSQL compatibility macros and internal
+session/catalog helpers:
+
+```sql
+select function_name, comment
+from duckdb_functions()
+where comment like 'PostgreSQL compatibility:%' or comment like 'Internal %'
+order by function_name;
+```
+
+The Community Extensions page collects these comments automatically after loading the extension.
+The five native server-control functions are documented above because DuckDB 1.5.5 does not
+expose description setters for C API table functions.
+
 | Area | Useful signatures | Purpose |
 | --- | --- | --- |
 | Strings | `initcap(s)`, `btrim(s, chars)` | Capitalize space-separated words; trim specified characters |
@@ -476,7 +490,7 @@ An authorized release build embeds the private core directly into the extension:
 
 See [docs/BUNDLED_CORE.md](docs/BUNDLED_CORE.md) for the local build and per-platform GitHub Release
 asset model. The platform payloads are published in the
-[`core-v0.1.4` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.4)
+[`core-v0.1.5` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.5)
 and checksum-pinned in `core-assets.lock`.
 
 <details>

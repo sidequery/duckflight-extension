@@ -12,9 +12,13 @@ select * from duckflight_servers();
 
 statement error
 select * from duckflight_adbc_serve('127.0.0.1:0', '');
+----
+does not exist
 
 statement error
 select * from duckflight_stop('adbc', '127.0.0.1:15051');
+----
+unsupported DuckFlight extension protocol
 
 query TT
 select * from duckflight_pg_serve('127.0.0.1:0', '');
