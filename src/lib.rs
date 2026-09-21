@@ -427,7 +427,9 @@ unsafe fn duckflight_init_c_api_internal(
         let core: Box<dyn CoreRuntime> = match dynamic_core::DynamicCore::load_bundled(info, access)
         {
             Ok(core) => Box::new(core),
-            Err(_) => Box::new(UnavailableCore::new("bundled core failed to initialize")),
+            Err(error) => Box::new(UnavailableCore::new(format!(
+                "bundled core failed to initialize: {error}"
+            ))),
         };
 
         #[cfg(not(duckflight_bundled_core))]

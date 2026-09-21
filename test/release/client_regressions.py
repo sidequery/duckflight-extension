@@ -274,15 +274,71 @@ def check_flight_regressions(address: str) -> None:
 
 
 def protobuf_strings(fields: dict[int, bytes]) -> bytes:
-    # These Flight SQL command fixtures contain only short length-delimited
-    # fields. Encode their standard protobuf wire format without generated stubs.
+    # Encode length-delimited Flight SQL fields without generated stubs.
     encoded = bytearray()
     for tag, value in fields.items():
-        if not 1 <= tag < 16 or len(value) >= 128:
-            raise ValueError("command fixture exceeds the short-field encoding")
-        encoded.extend(bytes([(tag << 3) | 2, len(value)]))
+        if not 1 <= tag < 16:
+            raise ValueError("command fixture requires a single-byte field tag")
+        encoded.append((tag << 3) | 2)
+        length = len(value)
+        while length >= 128:
+            encoded.append((length & 127) | 128)
+            length >>= 7
+        encoded.append(length)
         encoded.extend(value)
     return bytes(encoded)
+
+
+def check_flight_pool_recovery(address: str) -> None:
+    with flight.FlightClient(f"grpc://{address}") as client:
+        token = client.authenticate_basic_token(USERNAME, PASSWORD)
+        options = flight.FlightCallOptions(headers=[token], timeout=10)
+
+        def execute(sql: str):
+            command = protobuf_strings(
+                {
+                    1: b"type.googleapis.com/arrow.flight.protocol.sql.CommandStatementQuery",
+                    2: protobuf_strings({1: sql.encode()}),
+                }
+            )
+            return client.get_flight_info(
+                flight.FlightDescriptor.for_command(command), options
+            )
+
+        # Each mode must exceed the bundled core's 16 connection slots.
+        for explicit in (True, False):
+            for _ in range(24):
+                info = execute("select i from range(1000000000) t(i)")
+                reader = client.do_get(info.endpoints[0].ticket, options)
+                if reader.read_chunk().data.num_rows == 0:
+                    raise AssertionError("expected a running, nonempty query")
+                if explicit:
+                    request = protobuf_strings({1: info.serialize()})
+                    results = list(
+                        client.do_action(
+                            flight.Action("CancelFlightInfo", request), options
+                        )
+                    )
+                    assert_equal(
+                        results[0].body.to_pybytes(), b"\x08\x01", "cancel status"
+                    )
+                    try:
+                        while True:
+                            reader.read_chunk()
+                    except flight.FlightCancelledError:
+                        pass
+                    except StopIteration as error:
+                        raise AssertionError(
+                            "cancelled query completed normally"
+                        ) from error
+                else:
+                    reader.cancel()
+                del reader
+                probe = execute("select 42::integer as answer")
+                result = client.do_get(probe.endpoints[0].ticket, options).read_all()
+                assert_equal(result.to_pylist(), [{"answer": 42}], "pool recovery")
+            mode = "explicit cancellations" if explicit else "abandoned streams"
+            print(f"PASS 24 {mode} with successful follow-up queries", flush=True)
 
 
 def check_flight_key_metadata(address: str) -> None:
@@ -395,6 +451,7 @@ def run(extension: Path) -> None:
             )
             check_flight_regressions(flight_address)
             print("PASS GizmoSQL ADBC prepared SET and TPC-H Q20 schema", flush=True)
+            check_flight_pool_recovery(flight_address)
         finally:
             try:
                 if flight_address is not None:
