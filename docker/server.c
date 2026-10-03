@@ -7,6 +7,18 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+static volatile sig_atomic_t stopping;
+static pid_t cli_pid;
+
+static void interrupt_startup(int signal_number) {
+    (void)signal_number;
+    int saved_errno = errno;
+    stopping = 1;
+    // DuckDB uses SIGINT to cancel SQL; -bail then closes the database.
+    kill(cli_pid, SIGINT);
+    errno = saved_errno;
+}
+
 static const char *env(const char *name) {
     const char *value = getenv(name);
     return value ? value : "";
@@ -109,6 +121,20 @@ int main(void) {
         waitpid(child, NULL, 0);
         return 1;
     }
+    // Unbuffered writes let EINTR release a full pipe without later flushing
+    // listener commands after cancellation. Do not restart interrupted writes.
+    setvbuf(commands, NULL, _IONBF, 0);
+    cli_pid = child;
+    struct sigaction action = {0};
+    action.sa_handler = interrupt_startup;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGTERM, &action, NULL);
+    sigaction(SIGINT, &action, NULL);
+    sigset_t termination;
+    sigemptyset(&termination);
+    sigaddset(&termination, SIGTERM);
+    sigaddset(&termination, SIGINT);
+    sigprocmask(SIG_UNBLOCK, &termination, NULL);
     fputs("load '/opt/duckflight/duckflight.duckdb_extension';\n"
           "select case when loaded then 'DuckFlight core loaded' else error(detail) end "
           "from duckflight_core_status();\n", commands);
@@ -118,8 +144,8 @@ int main(void) {
     if (init_sql) {
         char buffer[4096];
         size_t length;
-        while ((length = fread(buffer, 1, sizeof(buffer), init_sql))) {
-            fwrite(buffer, 1, length, commands);
+        while (!stopping && (length = fread(buffer, 1, sizeof(buffer), init_sql))) {
+            if (fwrite(buffer, 1, length, commands) != length) break;
         }
         int failed = ferror(init_sql);
         fclose(init_sql);
@@ -129,20 +155,23 @@ int main(void) {
             waitpid(child, NULL, 0);
             return 1;
         }
-        fputs("\n;\n", commands);
+        if (!stopping) fputs("\n;\n", commands);
     }
     // Trusted startup may load extensions and allowlist dedicated data mounts.
     // Apply the shared SQL boundary before either network listener is reachable.
     // PgWire initializes each session's timezone through DuckDB configuration.
-    fputs("set allowed_configs=['TimeZone'];\n"
-          "set enable_external_access=false;\n"
-          "set lock_configuration=true;\n", commands);
-    serve(commands, "pgwire", "duckflight_pg_serve", pg, config);
-    serve(commands, "flight", "duckflight_flight_serve", flight, config);
-    fputs(".print DuckFlight ready\n", commands);
-    fflush(commands);
+    if (!stopping) {
+        fputs("set allowed_configs=['TimeZone'];\n"
+              "set enable_external_access=false;\n"
+              "set lock_configuration=true;\n", commands);
+    }
+    if (!stopping) serve(commands, "pgwire", "duckflight_pg_serve", pg, config);
+    if (!stopping) serve(commands, "flight", "duckflight_flight_serve", flight, config);
+    if (!stopping) fputs(".print DuckFlight ready\n", commands);
+    sigprocmask(SIG_BLOCK, &termination, NULL);
 
     int status;
+    if (stopping || ferror(commands)) goto shutdown;
     for (;;) {
         pid_t result = waitpid(child, &status, WNOHANG);
         if (result == child) goto finished;
@@ -159,8 +188,13 @@ int main(void) {
             fclose(commands);
             return 1;
         }
-        if (signal_number != SIGCHLD) break;
+        if (signal_number != SIGCHLD) {
+            // Input may be fully queued while the CLI still runs startup SQL.
+            kill(child, SIGINT);
+            break;
+        }
     }
+shutdown:
     // Closing the CLI database destroys the core and stops all of its listeners.
     fputs(".quit\n", commands);
     fclose(commands);
