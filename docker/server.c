@@ -131,6 +131,12 @@ int main(void) {
         }
         fputs("\n;\n", commands);
     }
+    // Trusted startup may load extensions and allowlist dedicated data mounts.
+    // Apply the shared SQL boundary before either network listener is reachable.
+    // PgWire initializes each session's timezone through DuckDB configuration.
+    fputs("set allowed_configs=['TimeZone'];\n"
+          "set enable_external_access=false;\n"
+          "set lock_configuration=true;\n", commands);
     serve(commands, "pgwire", "duckflight_pg_serve", pg, config);
     serve(commands, "flight", "duckflight_flight_serve", flight, config);
     fputs(".print DuckFlight ready\n", commands);

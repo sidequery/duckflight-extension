@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import psycopg
+import pyarrow as pa
 from pyarrow import flight
 
 
@@ -37,8 +38,100 @@ def protobuf_strings(fields: dict[int, bytes]) -> bytes:
     return bytes(encoded)
 
 
+def flight_query(client, options, sql: str):
+    command = protobuf_strings(
+        {
+            1: b"type.googleapis.com/arrow.flight.protocol.sql.CommandStatementQuery",
+            2: protobuf_strings({1: sql.encode()}),
+        }
+    )
+    info = client.get_flight_info(flight.FlightDescriptor.for_command(command), options)
+    return client.do_get(info.endpoints[0].ticket, options).read_all().to_pylist()
+
+
+def flight_execute(client, options, sql: str) -> None:
+    command = protobuf_strings(
+        {
+            1: b"type.googleapis.com/arrow.flight.protocol.sql.CommandStatementUpdate",
+            2: protobuf_strings({1: sql.encode()}),
+        }
+    )
+    writer, reader = client.do_put(
+        flight.FlightDescriptor.for_command(command), pa.schema([]), options
+    )
+    try:
+        writer.done_writing()
+        reader.read()
+    finally:
+        writer.close()
+
+
+SECRET_QUERIES = (
+    "select content from read_text('/run/secrets/duckflight.toml')",
+    "select content from read_text('/run/secrets/server.key')",
+    "select content from read_blob('/run/secrets/server.key')",
+    "select content from read_text('/imports/../run/secrets/server.key')",
+    "select content from read_text('/imports/key-alias')",
+    (
+        "select * from read_csv('/run/secrets/server.key', header=false, "
+        "columns={'line':'varchar'}, delim='|')"
+    ),
+)
+
+CONFIG_BYPASSES = (
+    "set enable_external_access=true",
+    "set lock_configuration=false",
+    "set allowed_paths=['/run/secrets/server.key']",
+    "set allowed_directories=['/run/secrets']",
+    "set allowed_configs=['enable_external_access','lock_configuration']",
+)
+
+CONFIG_RESETS = (
+    "reset enable_external_access",
+    "reset lock_configuration",
+    "reset allowed_paths",
+    "reset allowed_directories",
+)
+
+
+def denied(execute, sql: str, error_type, message: str) -> None:
+    try:
+        execute(sql)
+    except error_type as error:
+        assert message in str(error).lower(), (sql, str(error))
+    else:
+        raise AssertionError(f"restricted SQL succeeded: {sql}")
+
+
+def pg_security(connection) -> None:
+    for sql in SECRET_QUERIES:
+        denied(connection.execute, sql, psycopg.Error, "permission")
+    for sql in CONFIG_BYPASSES:
+        denied(connection.execute, sql, psycopg.Error, "configuration")
+    denied(
+        connection.execute,
+        "load '/opt/duckflight/duckflight.duckdb_extension'",
+        psycopg.Error,
+        "not allowed",
+    )
+    for sql in CONFIG_RESETS:
+        # PgWire may acknowledge RESET as a compatibility no-op. Neither success
+        # nor an error may relax the shared database policy.
+        try:
+            connection.execute(sql)
+        except psycopg.Error as error:
+            assert "configuration" in str(error).lower(), (sql, str(error))
+        policy = connection.execute(
+            "select current_setting('enable_external_access')::boolean, "
+            "current_setting('lock_configuration')::boolean"
+        ).fetchone()
+        assert policy == (False, True), (sql, policy)
+        denied(connection.execute, SECRET_QUERIES[1], psycopg.Error, "permission")
+
+
 def run(image: str, startup_timeout: float) -> None:
     password = secrets.token_urlsafe(24)
+    read_token = secrets.token_urlsafe(24)
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 10000).hex()
     volume = f"duckflight-smoke-{secrets.token_hex(6)}"
@@ -74,12 +167,31 @@ def run(image: str, startup_timeout: float) -> None:
         )
         (fixtures / "plaintext.toml").write_text(users)
         (fixtures / "duckflight.toml").write_text(
-            users + '\n[tls]\ncert = "server.crt"\nkey = "server.key"\n'
+            users
+            + f'\n[tokens.reader]\nsha256 = "{hashlib.sha256(read_token.encode()).hexdigest()}"\n'
+            + 'subject = "reader"\nscopes = ["query:execute", "transaction:manage"]\n'
+            + '\n[tls]\ncert = "server.crt"\nkey = "server.key"\n'
         )
+        (fixtures / "bootstrap.csv").write_text("value\nready\n")
         (fixtures / "init.sql").write_text(
             "create table if not exists smoke_rows(id integer);"
+            "create or replace table startup_import as "
+            "select * from read_csv('/run/secrets/bootstrap.csv');"
+        )
+        imports = fixtures / "imports"
+        imports.mkdir(mode=0o755)
+        (imports / "input.csv").write_text("id\n7\n")
+        (imports / "key-alias").symlink_to("/run/secrets/server.key")
+        (imports / "export").mkdir(mode=0o777)
+        (imports / "export").chmod(0o777)
+        (fixtures / "allowlist.sql").write_text(
+            (fixtures / "init.sql").read_text()
+            + "set allowed_paths=['/imports/input.csv'];"
+            + "set allowed_directories=['/imports/export'];"
+            + "set allowed_configs=['enable_external_access'];"
         )
         (fixtures / "invalid.sql").write_text("this is not valid sql;")
+        (fixtures / "prelocked.sql").write_text("set lock_configuration=true;")
         (fixtures / "quote's.toml").write_text(
             (fixtures / "duckflight.toml").read_text()
         )
@@ -89,7 +201,8 @@ def run(image: str, startup_timeout: float) -> None:
         )
         # Ephemeral test credentials only; readable by the image's non-root UID.
         for path in fixtures.iterdir():
-            path.chmod(0o644)
+            if path.is_file():
+                path.chmod(0o644)
 
         def start(*env: str) -> str:
             args = [
@@ -99,6 +212,8 @@ def run(image: str, startup_timeout: float) -> None:
                 f"type=volume,src={volume},dst=/data",
                 "--mount",
                 f"type=bind,src={fixtures},dst=/run/secrets,readonly",
+                "--mount",
+                f"type=bind,src={imports},dst=/imports",
                 "-p",
                 "127.0.0.1::4543",
                 "-p",
@@ -165,7 +280,18 @@ def run(image: str, startup_timeout: float) -> None:
                     "select current_setting('threads')::integer"
                 ).fetchone()
                 assert threads == (2,), threads
+                connection.execute("set timezone='UTC'")
+                assert connection.execute(
+                    "select current_setting('TimeZone')"
+                ).fetchone() == ("UTC",)
+                assert connection.execute(
+                    "select * from startup_import"
+                ).fetchall() == [("ready",)]
                 connection.execute("insert into smoke_rows values (42)")
+                pg_security(connection)
+                assert connection.execute("select id from smoke_rows").fetchall() == [
+                    (42,)
+                ]
             try:
                 pg(container, "incorrect")
             except psycopg.OperationalError:
@@ -179,23 +305,81 @@ def run(image: str, startup_timeout: float) -> None:
             ) as client:
                 token = client.authenticate_basic_token("smoke", password)
                 options = flight.FlightCallOptions(headers=[token], timeout=10)
-                command = protobuf_strings(
-                    {
-                        1: b"type.googleapis.com/arrow.flight.protocol.sql.CommandStatementQuery",
-                        2: protobuf_strings({1: b"select id from smoke_rows"}),
-                    }
+                assert flight_query(client, options, "select id from smoke_rows") == [
+                    {"id": 42}
+                ]
+                flight_execute(client, options, "insert into smoke_rows values (43)")
+                flight_execute(
+                    client, options, "update smoke_rows set id=44 where id=43"
                 )
-                info = client.get_flight_info(
-                    flight.FlightDescriptor.for_command(command), options
+                assert flight_query(
+                    client, options, "select id from smoke_rows order by id"
+                ) == [{"id": 42}, {"id": 44}]
+                flight_execute(client, options, "delete from smoke_rows where id=44")
+                for sql in SECRET_QUERIES:
+                    denied(
+                        lambda sql: flight_query(client, options, sql),
+                        sql,
+                        flight.FlightError,
+                        "failed to infer query schema",
+                    )
+                for sql in CONFIG_BYPASSES + CONFIG_RESETS:
+                    denied(
+                        lambda sql: flight_execute(client, options, sql),
+                        sql,
+                        flight.FlightError,
+                        "configuration",
+                    )
+                read_options = flight.FlightCallOptions(
+                    headers=[(b"authorization", f"Bearer {read_token}".encode())],
+                    timeout=10,
                 )
-                result = client.do_get(info.endpoints[0].ticket, options).read_all()
-                assert result.to_pylist() == [{"id": 42}]
+                for sql in SECRET_QUERIES:
+                    denied(
+                        lambda sql: flight_query(client, read_options, sql),
+                        sql,
+                        flight.FlightError,
+                        "failed to infer query schema",
+                    )
+                assert flight_query(
+                    client, read_options, "select id from smoke_rows"
+                ) == [{"id": 42}]
                 try:
                     client.authenticate_basic_token("smoke", "incorrect")
                 except flight.FlightUnauthenticatedError:
                     pass
                 else:
                     raise AssertionError("incorrect Flight password accepted")
+            stop(container)
+            container = start("DUCKFLIGHT_INIT_SQL=/run/secrets/allowlist.sql")
+            ready(container)
+            with pg(container) as connection:
+                assert connection.execute(
+                    "select id from read_csv('/imports/input.csv')"
+                ).fetchall() == [(7,)]
+                connection.execute(
+                    "copy smoke_rows to '/imports/export/rows.csv' (header)"
+                )
+                assert connection.execute(
+                    "select id from read_csv('/imports/export/rows.csv')"
+                ).fetchall() == [(42,)]
+                pg_security(connection)
+            port = int(docker("port", container, "45337/tcp").rsplit(":", 1)[1])
+            with flight.FlightClient(
+                f"grpc+tls://localhost:{port}",
+                tls_root_certs=(fixtures / "server.crt").read_bytes(),
+            ) as client:
+                token = client.authenticate_basic_token("smoke", password)
+                options = flight.FlightCallOptions(headers=[token], timeout=10)
+                assert flight_query(
+                    client, options, "select id from read_csv('/imports/input.csv')"
+                ) == [{"id": 7}]
+                denied(
+                    lambda sql: flight_query(client, options, sql),
+                    SECRET_QUERIES[1],
+                    flight.FlightError,
+                    "failed to infer query schema",
+                )
             stop(container)
             container = start("DUCKFLIGHT_FLIGHT_ADDRESS=")
             ready(container)
@@ -242,6 +426,7 @@ def run(image: str, startup_timeout: float) -> None:
                 ("DUCKFLIGHT_THREADS=invalid",),
                 ("DUCKFLIGHT_INIT_SQL=/missing.sql",),
                 ("DUCKFLIGHT_INIT_SQL=/run/secrets/invalid.sql",),
+                ("DUCKFLIGHT_INIT_SQL=/run/secrets/prelocked.sql",),
                 # Second-listener failure must clean up the first one too.
                 ("DUCKFLIGHT_FLIGHT_ADDRESS=invalid",),
             ):
@@ -254,6 +439,15 @@ def run(image: str, startup_timeout: float) -> None:
                     timeout=30,
                 )
                 assert process.returncode == 0 and process.stdout.strip() != "0", env
+                if env == ("DUCKFLIGHT_INIT_SQL=/run/secrets/prelocked.sql",):
+                    logs = subprocess.check_output(
+                        ["docker", "logs", container],
+                        text=True,
+                        stderr=subprocess.STDOUT,
+                    )
+                    assert "configuration has been locked" in logs, logs
+                    assert "listening on" not in logs, logs
+                    assert "DuckFlight ready" not in logs, logs
             assert "v1.5.6" in docker(
                 "run", "--rm", "--entrypoint", "duckdb", image, "--version"
             )
@@ -261,6 +455,9 @@ def run(image: str, startup_timeout: float) -> None:
                 "PASS TLS PostgreSQL/Flight, auth rejection, resource knobs, protocol selection,"
             )
             print("     persistence, graceful stop, startup failures, and DuckDB CLI")
+            print(
+                "PASS client secrets isolation, locked settings, and operator data allowlists"
+            )
         finally:
             for container in containers:
                 docker("rm", "-f", container)
