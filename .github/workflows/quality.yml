@@ -39,3 +39,9 @@ jobs:
           uv run --with ruff ruff check scripts/duckflight_auth.py test/test_duckflight_auth.py
           uv run --with ruff ruff format --check scripts/duckflight_auth.py test/test_duckflight_auth.py
           uv run test/test_duckflight_auth.py
+      - name: Bundled build target tests
+        run: |
+          git submodule update --init
+          uv run --with ruff ruff check test/test_build_bundled.py
+          uv run --with ruff ruff format --check test/test_build_bundled.py
+          uv run test/test_build_bundled.py

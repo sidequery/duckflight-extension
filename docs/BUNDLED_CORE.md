@@ -12,6 +12,7 @@ after the library is unloaded. A bundled build ignores `DUCKFLIGHT_CORE_PATH`.
 To build from an authorized private DuckFlight checkout:
 
 ```sh
+make configure
 ./scripts/build-bundled.sh /path/to/private/duckflight
 ```
 
@@ -19,6 +20,22 @@ The script builds `duckflight-core-ffi` with its native dependencies closed for 
 in the extension, adds DuckDB's extension metadata, and leaves the final artifact at
 `build/release/duckflight.duckdb_extension`. Generated archives and extension binaries are ignored
 and must never be committed.
+
+By default, the configured platform must match the host. For a different architecture on the
+same operating system, set either `DUCKDB_PLATFORM` or `DUCKFLIGHT_CORE_TARGET`; the script resolves
+the other value and uses that target for both core and extension compilation and DuckDB metadata.
+If both are set, they must agree. An explicit selection refreshes prior platform configuration.
+For example, on an Apple Silicon builder with the x86_64 Rust target and native dependencies installed:
+
+```sh
+DUCKDB_PLATFORM=osx_amd64 ./scripts/build-bundled.sh /path/to/private/duckflight
+```
+
+The supported mappings are `osx_arm64`/`aarch64-apple-darwin`,
+`osx_amd64`/`x86_64-apple-darwin`, `linux_arm64`/`aarch64-unknown-linux-gnu`,
+`linux_amd64`/`x86_64-unknown-linux-gnu`, and `windows_amd64`/`x86_64-pc-windows-msvc`.
+Cross-OS builds and other platform or target variants are rejected before compilation.
+Cross-compilation still requires the appropriate linker and target-native dependencies.
 
 For DuckDB Community's central per-platform build, publish the proprietary core libraries as
 versioned GitHub Release assets, with a pinned SHA-256 for every supported platform. The Community
