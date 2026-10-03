@@ -6,8 +6,12 @@ DuckFlight core; users do not install or download a sidecar library.
 The public repository can build without the private core for source review, formatting, linting,
 function discovery, and mock lifecycle tests. A release-producing build supplies a platform core
 library through `DUCKFLIGHT_CORE_BUNDLE_PATH`. `build.rs` embeds those bytes in the extension. At
-`LOAD`, the extension writes the core to a process-private temporary file, loads it, and removes it
-after the library is unloaded. A bundled build ignores `DUCKFLIGHT_CORE_PATH`.
+`LOAD`, Linux loads the core from a sealed executable memory file through `/proc/self/fd`, so
+temporary storage mounted `noexec` is supported. Linux requires `memfd_create` and accessible
+`/proc/self/fd`; policies forbidding executable memory files produce a diagnostic in
+`duckflight_core_status()`. Other platforms use a process-private temporary file. The backing file
+or descriptor remains alive until after the core handle is destroyed and the library is unloaded.
+A bundled build ignores `DUCKFLIGHT_CORE_PATH`.
 
 To build from an authorized private DuckFlight checkout:
 
@@ -56,6 +60,9 @@ Before publishing a new core, exercise the final bundled extension with real aut
 ```sh
 uv run test/release/client_regressions.py build/release/duckflight.duckdb_extension
 ```
+
+On Linux, run the same suite with `TMPDIR` on a `noexec` mount and pass
+`--require-noexec-tmp` to verify both the mount flags and bundled listener behavior.
 
 This test uses a temporary in-memory database and loopback listeners. It checks SQLAlchemy numeric
 and foreign-key reflection through psycopg2, PostgreSQL catalog type metadata and failed-transaction

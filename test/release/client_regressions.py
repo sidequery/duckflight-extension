@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import secrets
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -473,7 +475,18 @@ def main() -> None:
         description="Run public-bundle DuckFlight client regressions"
     )
     parser.add_argument("extension", type=Path, help="bundled .duckdb_extension path")
+    parser.add_argument(
+        "--require-noexec-tmp",
+        action="store_true",
+        help="require Linux temporary storage mounted noexec before exercising the bundle",
+    )
     args = parser.parse_args()
+    if args.require_noexec_tmp:
+        if sys.platform != "linux":
+            parser.error("--require-noexec-tmp requires Linux")
+        temp_path = tempfile.gettempdir()
+        if not os.statvfs(temp_path).f_flag & os.ST_NOEXEC:
+            parser.error(f"temporary storage is executable: {temp_path}")
     run(args.extension)
 
 
