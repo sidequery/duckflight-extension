@@ -6,7 +6,79 @@ use duckflight_extension_abi::{
 };
 use libloading::Library;
 use std::{error::Error, ffi::c_void, fmt, path::Path, ptr, slice, str};
-use tempfile::NamedTempFile;
+#[cfg(target_os = "linux")]
+type BundleFile = std::fs::File;
+#[cfg(not(target_os = "linux"))]
+type BundleFile = tempfile::NamedTempFile;
+
+#[cfg(any(duckflight_bundled_core, test))]
+fn prepare_bundle(bytes: &[u8]) -> Result<(BundleFile, std::path::PathBuf), DynamicCoreError> {
+    use std::io::Write;
+
+    #[cfg(target_os = "linux")]
+    let (mut bundle, path) = {
+        use std::os::fd::{AsRawFd, FromRawFd};
+
+        // An executable memfd is independent of TMPDIR's mount flags. Request execution
+        // explicitly on newer kernels; older kernels do not recognize MFD_EXEC.
+        let flags = libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING;
+        let mut fd =
+            unsafe { libc::memfd_create(c"duckflight-core".as_ptr(), flags | libc::MFD_EXEC) };
+        if fd < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL) {
+            fd = unsafe { libc::memfd_create(c"duckflight-core".as_ptr(), flags) };
+        }
+        if fd < 0 {
+            return Err(DynamicCoreError(format!(
+                "create executable bundled core memfd: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        let bundle = unsafe { std::fs::File::from_raw_fd(fd) };
+        let path = std::path::PathBuf::from(format!("/proc/self/fd/{}", bundle.as_raw_fd()));
+        (bundle, path)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let (mut bundle, path) = {
+        let bundle = tempfile::NamedTempFile::new().map_err(|error| {
+            DynamicCoreError(format!("create temporary bundled core file: {error}"))
+        })?;
+        let path = bundle.path().to_owned();
+        (bundle, path)
+    };
+    bundle
+        .write_all(bytes)
+        .and_then(|_| bundle.flush())
+        .map_err(|error| DynamicCoreError(format!("write bundled core: {error}")))?;
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+
+        // Seal the complete payload before executing it. Keep the descriptor alive
+        // until after dlclose so its /proc path cannot be reused by another library.
+        let seals =
+            libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+        if unsafe { libc::fcntl(bundle.as_raw_fd(), libc::F_ADD_SEALS, seals) } < 0 {
+            return Err(DynamicCoreError(format!(
+                "seal bundled core memfd: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+    }
+    Ok((bundle, path))
+}
+
+#[cfg(any(duckflight_bundled_core, test))]
+unsafe fn load_bundle(bytes: &[u8]) -> Result<(Library, BundleFile), DynamicCoreError> {
+    let (bundle, path) = prepare_bundle(bytes)?;
+    let library = unsafe { Library::new(&path) }.map_err(|error| {
+        DynamicCoreError(format!(
+            "load bundled core from {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok((library, bundle))
+}
 
 const ERROR_CAPACITY: usize = 4096;
 const API_HEADER_SIZE: usize =
@@ -53,7 +125,7 @@ pub(super) struct DynamicCore {
     // The API table and handle remain valid only while the defining library is loaded.
     _library: Library,
     // Declared after the library so it is removed only after the OS unloads it.
-    _bundle_file: Option<NamedTempFile>,
+    _bundle_file: Option<BundleFile>,
 }
 
 // ABI v1 permits concurrent calls. Runtime providers synchronize their mutable state internally,
@@ -68,13 +140,20 @@ impl DynamicCore {
         extension_info: duckdb::ffi::duckdb_extension_info,
         extension_access: *const duckdb::ffi::duckdb_extension_access,
     ) -> Result<Self, Box<dyn Error>> {
-        let library = unsafe { Library::new(path) }
-            .map_err(|_| DynamicCoreError("load configured runtime library".into()))?;
+        let library = unsafe { Library::new(path) }.map_err(|error| {
+            DynamicCoreError(format!(
+                "load configured runtime library {}: {error}",
+                path.display()
+            ))
+        })?;
         let api = {
             let entry =
                 unsafe { library.get::<DuckflightCoreApiEntryV1>(DUCKFLIGHT_CORE_API_SYMBOL_V1) }
-                    .map_err(|_| {
-                    DynamicCoreError("resolve duckflight_core_api_v1 in configured runtime".into())
+                    .map_err(|error| {
+                    DynamicCoreError(format!(
+                        "resolve duckflight_core_api_v1 in configured runtime {}: {error}",
+                        path.display()
+                    ))
                 })?;
             unsafe { entry() }
         };
@@ -95,21 +174,13 @@ impl DynamicCore {
         extension_info: duckdb::ffi::duckdb_extension_info,
         extension_access: *const duckdb::ffi::duckdb_extension_access,
     ) -> Result<Self, Box<dyn Error>> {
-        use std::io::Write;
-
         static CORE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/duckflight_core.bundle"));
-        let mut bundle = NamedTempFile::new()
-            .map_err(|_| DynamicCoreError("create temporary bundled core file".into()))?;
-        bundle
-            .write_all(CORE)
-            .and_then(|_| bundle.flush())
-            .map_err(|_| DynamicCoreError("write temporary bundled core file".into()))?;
-        let library = unsafe { Library::new(bundle.path()) }
-            .map_err(|_| DynamicCoreError("load bundled core".into()))?;
+        let (library, bundle) = unsafe { load_bundle(CORE) }?;
         let api = {
-            let entry =
-                unsafe { library.get::<DuckflightCoreApiEntryV1>(DUCKFLIGHT_CORE_API_SYMBOL_V1) }
-                    .map_err(|_| DynamicCoreError("resolve bundled core API".into()))?;
+            let entry = unsafe {
+                library.get::<DuckflightCoreApiEntryV1>(DUCKFLIGHT_CORE_API_SYMBOL_V1)
+            }
+            .map_err(|error| DynamicCoreError(format!("resolve bundled core API: {error}")))?;
             unsafe { entry() }
         };
         unsafe {
@@ -129,7 +200,7 @@ impl DynamicCore {
         extension_info: duckdb::ffi::duckdb_extension_info,
         extension_access: *const duckdb::ffi::duckdb_extension_access,
         library: Library,
-        bundle_file: Option<NamedTempFile>,
+        bundle_file: Option<BundleFile>,
         status_detail: &'static str,
     ) -> Result<Self, Box<dyn Error>> {
         unsafe { validate_api_table_header(api)? };
@@ -442,6 +513,69 @@ mod tests {
             provider_error("", DuckflightStatus::NOT_FOUND),
             "DuckFlight runtime failed with status 4"
         );
+    }
+
+    #[test]
+    fn external_loader_error_preserves_path_and_os_reason() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("missing-duckflight-core");
+        let loader_error = unsafe { Library::new(&path) }.err().unwrap();
+        let error = unsafe { DynamicCore::load(&path, ptr::null_mut(), ptr::null()) }
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "load configured runtime library {}: {loader_error}",
+                path.display()
+            )
+        );
+    }
+
+    #[test]
+    fn bundled_loader_error_preserves_os_reason() {
+        let error = unsafe { load_bundle(b"invalid native library") }
+            .err()
+            .unwrap()
+            .to_string();
+        let (_, reason) = error.split_once(": ").expect("loader reason is included");
+        assert!(error.starts_with("load bundled core from "));
+        assert!(!reason.is_empty());
+        // The loader identifies the failed image, rather than only our operation.
+        assert!(reason.contains("/"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bundled_memfd_is_sealed_and_loads_native_code() {
+        use std::os::fd::AsRawFd;
+
+        // Locate the running process's native libc without assuming a distro path.
+        let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+        assert_ne!(
+            unsafe { libc::dladdr(libc::getpid as *const () as *const c_void, &mut info) },
+            0
+        );
+        let path = unsafe { std::ffi::CStr::from_ptr(info.dli_fname) }
+            .to_str()
+            .unwrap();
+        let bytes = std::fs::read(path).unwrap();
+        let (library, bundle) = unsafe { load_bundle(&bytes) }.unwrap();
+        let getpid =
+            unsafe { library.get::<unsafe extern "C" fn() -> libc::pid_t>(b"getpid\0") }.unwrap();
+        assert_eq!(unsafe { getpid() }, unsafe { libc::getpid() });
+        let seals = unsafe { libc::fcntl(bundle.as_raw_fd(), libc::F_GET_SEALS) };
+        assert_eq!(
+            seals,
+            libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL
+        );
+        assert_eq!(unsafe { libc::ftruncate(bundle.as_raw_fd(), 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM)
+        );
+        drop(library);
+        drop(bundle);
     }
 
     #[repr(C)]
