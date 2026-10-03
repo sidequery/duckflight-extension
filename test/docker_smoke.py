@@ -440,7 +440,11 @@ def run(image: str, startup_timeout: float) -> None:
                 )
                 assert process.returncode == 0 and process.stdout.strip() != "0", env
                 if env == ("DUCKFLIGHT_INIT_SQL=/run/secrets/prelocked.sql",):
-                    logs = docker("logs", container)
+                    logs = subprocess.check_output(
+                        ["docker", "logs", container],
+                        text=True,
+                        stderr=subprocess.STDOUT,
+                    )
                     assert "configuration has been locked" in logs, logs
                     assert "listening on" not in logs, logs
                     assert "DuckFlight ready" not in logs, logs
