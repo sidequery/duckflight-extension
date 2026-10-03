@@ -155,7 +155,7 @@ The [Airport example](#bearer-tokens) uses the same Flight listener.
 | `DUCKFLIGHT_MEMORY_LIMIT` | DuckDB default | DuckDB memory limit, e.g. `1GB`; leave room for other process memory |
 | `DUCKFLIGHT_THREADS` | DuckDB default | DuckDB worker threads, e.g. `2` |
 | `DUCKFLIGHT_TEMP_DIRECTORY` | DuckDB default | Writable spill directory; mount separate storage if needed |
-| `DUCKFLIGHT_INIT_SQL` | Unset | Mounted SQL file executed before listeners start **on every startup**; make it idempotent |
+| `DUCKFLIGHT_INIT_SQL` | Unset | Path inside the container to a mounted SQL file, e.g. `/run/secrets/init.sql`; executed before listeners start **on every startup**; make it idempotent |
 
 At least one protocol must be enabled. Changing bind ports also requires changing Docker's
 port mapping. Authentication, token scopes, and TLS remain authoritative in the TOML file;
