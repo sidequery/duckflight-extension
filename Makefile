@@ -4,7 +4,7 @@ PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 EXTENSION_NAME=duckflight
 USE_UNSTABLE_C_API=1
-TARGET_DUCKDB_VERSION=v1.5.5
+TARGET_DUCKDB_VERSION=v1.5.6
 
 ifeq ($(OS),Windows_NT)
 MOCK_CORE_LIBRARY=target/debug/duckflight_mock_core.dll

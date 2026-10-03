@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #   "adbc-driver-gizmosql==2.0.12",
-#   "duckdb==1.5.5",
+#   "duckdb==1.5.6",
 #   "psycopg[binary]>=3.2,<4",
 #   "psycopg2-binary>=2.9,<3",
 #   "pyarrow",
