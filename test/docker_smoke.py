@@ -272,6 +272,60 @@ def run(image: str, startup_timeout: float) -> None:
             docker("stop", "--time", "10", container)
             assert docker("inspect", "-f", "{{.State.ExitCode}}", container) == "0"
 
+        def cancel_startup(signal: str, large_input: bool) -> None:
+            marker = f"/data/running-{signal}-{int(large_input)}.csv"
+            startup = fixtures / "long-startup.sql"
+            startup.write_text(
+                "copy (select sum(i) from range(1000000000000) t(i)) "
+                f"to '{marker}';\n"
+                # The CLI cannot consume this input while COPY is executing.
+                + ("-- queued startup input\n" * 100000 if large_input else "")
+                + "create table startup_finished(value integer);\n"
+            )
+            startup.chmod(0o644)
+            container = start("DUCKFLIGHT_INIT_SQL=/run/secrets/long-startup.sql")
+            deadline = time.monotonic() + startup_timeout
+            while time.monotonic() < deadline:
+                # COPY creates its output sink during execution, before the
+                # aggregate finishes: this proves the long query has begun.
+                if (
+                    docker(
+                        "exec",
+                        container,
+                        "duckdb",
+                        "-noheader",
+                        "-list",
+                        ":memory:",
+                        "-c",
+                        f"select count(*) from glob('{marker}')",
+                    )
+                    == "1"
+                ):
+                    break
+                time.sleep(0.2)
+            else:
+                raise AssertionError("long startup query did not begin")
+            began = time.monotonic()
+            docker("kill", "--signal", signal, container)
+            exited = subprocess.run(
+                ["docker", "wait", container],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            state = json.loads(docker("inspect", container))[0]["State"]
+            assert exited.stdout.strip() in ("0", "1", "130"), state
+            assert not state["OOMKilled"], state
+            logs = docker("logs", container)
+            assert "DuckFlight ready" not in logs, logs
+            assert "listening on" not in logs, logs
+            print(
+                f"Cancelled {signal} startup (large input={large_input}) "
+                f"after query began in {time.monotonic() - began:.1f}s",
+                flush=True,
+            )
+
         try:
             container = start()
             ready(container)
@@ -419,6 +473,20 @@ def run(image: str, startup_timeout: float) -> None:
                 timeout=15,
             )
             assert exited.stdout.strip() == "0", exited.stdout
+            for signal in ("SIGTERM", "SIGINT"):
+                for large_input in (False, True):
+                    cancel_startup(signal, large_input)
+            container = start()
+            ready(container)
+            with pg(container) as connection:
+                assert connection.execute("select id from smoke_rows").fetchall() == [
+                    (42,)
+                ]
+                assert connection.execute(
+                    "select count(*) from information_schema.tables "
+                    "where table_name = 'startup_finished'"
+                ).fetchone() == (0,)
+            stop(container)
             for env in (
                 ("DUCKFLIGHT_CONFIG=/missing.toml",),
                 ("DUCKFLIGHT_CONFIG=/run/secrets/plaintext.toml",),
@@ -431,13 +499,19 @@ def run(image: str, startup_timeout: float) -> None:
                 ("DUCKFLIGHT_FLIGHT_ADDRESS=invalid",),
             ):
                 container = start(*env)
-                process = subprocess.run(
-                    ["docker", "wait", container],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
+                try:
+                    process = subprocess.run(
+                        ["docker", "wait", container],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                except subprocess.TimeoutExpired as error:
+                    raise AssertionError(
+                        f"startup failure did not exit for {env}:\n"
+                        + docker("logs", container)
+                    ) from error
                 assert process.returncode == 0 and process.stdout.strip() != "0", env
                 if env == ("DUCKFLIGHT_INIT_SQL=/run/secrets/prelocked.sql",):
                     logs = subprocess.check_output(
@@ -454,7 +528,9 @@ def run(image: str, startup_timeout: float) -> None:
             print(
                 "PASS TLS PostgreSQL/Flight, auth rejection, resource knobs, protocol selection,"
             )
-            print("     persistence, graceful stop, startup failures, and DuckDB CLI")
+            print(
+                "     persistence, graceful stop, startup cancellation/failures, and DuckDB CLI"
+            )
             print(
                 "PASS client secrets isolation, locked settings, and operator data allowlists"
             )
