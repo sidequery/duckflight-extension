@@ -102,10 +102,11 @@ through another system.
 
 ## Docker
 
-The image includes DuckDB **1.5.6** (Python host and CLI) and the current extension built
+The image includes the DuckDB **1.5.6** CLI and the current extension built
 from this checkout, with the checksum-pinned production core embedded. It starts both
 PostgreSQL and Flight SQL against one persistent database, runs as UID/GID `10001`,
-and downloads nothing at startup.
+and downloads nothing at startup. The runtime uses `scratch` with only the CLI, extension,
+required shared libraries, CA certificates, and a small native lifecycle launcher.
 
 Build locally, including the pinned build-tool submodule:
 
@@ -180,10 +181,10 @@ lockfile. The image contains the core's binary-distribution license.
 The Docker workflow builds and smoke-tests Linux amd64 and arm64 natively on pull requests.
 On `main` (or a manual run against `main`) it publishes tested images to
 `ghcr.io/sidequery/duckflight-extension`, with `latest` and full commit-SHA tags. Prefer a
-commit tag or image digest for deployments. The GHCR package is configured for public,
-anonymous pulls, and the publishing workflow checks that both architectures are available
-without registry credentials. Replace `duckflight:local` in the commands above with that
-registry image and tag to consume a published build.
+commit tag or image digest for deployments. The publishing workflow checks that both
+architectures are available without registry credentials. Replace
+`duckflight:local` in the commands above with that registry image and tag to consume a
+published build.
 
 To run the same real-client container checks locally:
 

@@ -79,6 +79,14 @@ def run(image: str, startup_timeout: float) -> None:
         (fixtures / "init.sql").write_text(
             "create table if not exists smoke_rows(id integer);"
         )
+        (fixtures / "invalid.sql").write_text("this is not valid sql;")
+        (fixtures / "quote's.toml").write_text(
+            (fixtures / "duckflight.toml").read_text()
+        )
+        (fixtures / "quote's.sql").write_text(
+            "create table initialized(value varchar);"
+            "insert into initialized values ('ready') -- no final semicolon"
+        )
         # Ephemeral test credentials only; readable by the image's non-root UID.
         for path in fixtures.iterdir():
             path.chmod(0o644)
@@ -203,12 +211,37 @@ def run(image: str, startup_timeout: float) -> None:
             ready(container)
             assert "pgwire listening" not in docker("logs", container)
             stop(container)
+            container = start(
+                "DUCKFLIGHT_FLIGHT_ADDRESS=",
+                "DUCKFLIGHT_DATABASE=:memory:",
+                "DUCKFLIGHT_CONFIG=/run/secrets/quote's.toml",
+                "DUCKFLIGHT_INIT_SQL=/run/secrets/quote's.sql",
+                "DUCKFLIGHT_TEMP_DIRECTORY=/data/spill's",
+            )
+            ready(container)
+            with pg(container) as connection:
+                assert connection.execute("select * from initialized").fetchall() == [
+                    ("ready",)
+                ]
+                assert connection.execute(
+                    "select current_setting('temp_directory')"
+                ).fetchone() == ("/data/spill's",)
+            docker("kill", "--signal", "SIGINT", container)
+            exited = subprocess.run(
+                ["docker", "wait", container],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            assert exited.stdout.strip() == "0", exited.stdout
             for env in (
                 ("DUCKFLIGHT_CONFIG=/missing.toml",),
                 ("DUCKFLIGHT_CONFIG=/run/secrets/plaintext.toml",),
                 ("DUCKFLIGHT_PG_ADDRESS=", "DUCKFLIGHT_FLIGHT_ADDRESS="),
                 ("DUCKFLIGHT_THREADS=invalid",),
                 ("DUCKFLIGHT_INIT_SQL=/missing.sql",),
+                ("DUCKFLIGHT_INIT_SQL=/run/secrets/invalid.sql",),
                 # Second-listener failure must clean up the first one too.
                 ("DUCKFLIGHT_FLIGHT_ADDRESS=invalid",),
             ):

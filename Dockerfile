@@ -21,6 +21,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     DUCKFLIGHT_CORE_BUNDLE_PATH="$(./scripts/fetch-core-release.sh)" \
     DUCKDB_EXTENSION_NAME=duckflight DUCKDB_EXTENSION_MIN_DUCKDB_VERSION=v1.5.6 \
     cargo build --locked --release \
+    && strip --strip-unneeded target/release/libduckflight.so \
     && configure/venv/bin/python extension-ci-tools/scripts/append_extension_metadata.py \
         -l target/release/libduckflight.so -o /build/duckflight.duckdb_extension \
         -n duckflight -dv v1.5.6 -evf configure/extension_version.txt \
@@ -30,23 +31,37 @@ RUN set -eu; platform="$(cat configure/platform.txt)"; \
     test -n "$record"; set -- $record; \
     curl --fail --location --retry 3 "$2" -o /tmp/duckdb.zip; \
     printf '%s  /tmp/duckdb.zip\n' "$1" | sha256sum --check -; \
-    unzip /tmp/duckdb.zip -d /build/cli
+    unzip /tmp/duckdb.zip -d /build/cli \
+    && strip --strip-unneeded /build/cli/duckdb
 RUN curl --fail --location --retry 3 \
         https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.6/DUCKFLIGHT_CORE_BINARY_LICENSE.txt \
         -o /build/DUCKFLIGHT_CORE_BINARY_LICENSE.txt \
     && echo '1a501d0c38c91c53e0766a9e8c7910d7d11c0ec65ca872f883d5046ed82d1ee2  /build/DUCKFLIGHT_CORE_BINARY_LICENSE.txt' | sha256sum --check -
+RUN curl --fail --location --retry 3 https://raw.githubusercontent.com/duckdb/duckdb/v1.5.6/LICENSE \
+        -o /build/DUCKDB_LICENSE.txt \
+    && echo '7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb  /build/DUCKDB_LICENSE.txt' | sha256sum --check -
+COPY docker/server.c docker/server.c
+COPY LICENSE LICENSE
 
-FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3 AS runtime
-COPY --from=uv /uv /usr/local/bin/uv
-RUN uv pip install --system --no-cache duckdb==1.5.6 \
-    && useradd --uid 10001 --create-home duckflight \
-    && mkdir -p /data /opt/duckflight \
-    && chown duckflight:duckflight /data
-COPY --from=build /build/duckflight.duckdb_extension /opt/duckflight/duckflight.duckdb_extension
-COPY --from=build /build/cli/duckdb /usr/local/bin/duckdb
-COPY docker/server.py /opt/duckflight/server.py
-COPY LICENSE /opt/duckflight/LICENSE
-COPY --from=build /build/DUCKFLIGHT_CORE_BINARY_LICENSE.txt /opt/duckflight/DUCKFLIGHT_CORE_BINARY_LICENSE.txt
+RUN mkdir -p /runtime/usr/local/bin /runtime/opt/duckflight /runtime/etc/ssl/certs \
+        /runtime/data /runtime/tmp \
+    && cc -Os -s -Wall -Wextra -Werror docker/server.c -o /runtime/usr/local/bin/duckflight-server \
+    && cp /build/cli/duckdb /runtime/usr/local/bin/ \
+    && cp /build/duckflight.duckdb_extension LICENSE DUCKFLIGHT_CORE_BINARY_LICENSE.txt DUCKDB_LICENSE.txt /runtime/opt/duckflight/ \
+    && cp /usr/share/doc/libc6/copyright /runtime/opt/duckflight/LIBC_COPYRIGHT \
+    && cp /usr/share/doc/libstdc++6/copyright /runtime/opt/duckflight/LIBSTDCXX_COPYRIGHT \
+    && cp /usr/share/doc/libgcc-s1/copyright /runtime/opt/duckflight/LIBGCC_COPYRIGHT \
+    && cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/certs/ \
+    && { ldd /build/cli/duckdb; ldd /build/duckflight.duckdb_extension; ldd /runtime/usr/local/bin/duckflight-server; } \
+        | awk '/=> \// {print $3} /^\t\// {print $1}' | sort -u \
+        | xargs -I '{}' cp --parents -L '{}' /runtime \
+    && printf 'duckflight:x:10001:10001::/data:/sbin/nologin\n' > /runtime/etc/passwd \
+    && printf 'duckflight:x:10001:\n' > /runtime/etc/group \
+    && chown 10001:10001 /runtime/data \
+    && chmod 1777 /runtime/tmp
+
+FROM scratch AS runtime
+COPY --from=build /runtime/ /
 LABEL org.opencontainers.image.source="https://github.com/sidequery/duckflight-extension"
 USER 10001:10001
 WORKDIR /data
@@ -54,7 +69,7 @@ ENV DUCKFLIGHT_DATABASE=/data/duckflight.duckdb \
     DUCKFLIGHT_CONFIG=/run/secrets/duckflight.toml \
     DUCKFLIGHT_PG_ADDRESS=0.0.0.0:5433 \
     DUCKFLIGHT_FLIGHT_ADDRESS=0.0.0.0:31337 \
-    PYTHONUNBUFFERED=1
+    HOME=/data
 EXPOSE 5433 31337
 STOPSIGNAL SIGTERM
-ENTRYPOINT ["python", "/opt/duckflight/server.py"]
+ENTRYPOINT ["/usr/local/bin/duckflight-server"]
