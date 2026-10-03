@@ -332,9 +332,13 @@ impl ErrorBuffer {
         &mut self.ffi
     }
 
-    fn message(&self) -> String {
-        let used = self.required.min(self.bytes.len());
-        String::from_utf8_lossy(&self.bytes[..used]).into_owned()
+    fn message(&self) -> Option<String> {
+        // `required` is the full diagnostic size, not a count of bytes copied.
+        // Providers may leave the buffer untouched when it cannot hold the message.
+        if self.required > self.bytes.len() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&self.bytes[..self.required]).into_owned())
     }
 }
 
@@ -342,11 +346,17 @@ fn check_status(status: DuckflightStatus, error: &ErrorBuffer) -> Result<(), Box
     if status.is_ok() {
         return Ok(());
     }
-    let message = error.message();
-    let detail = if message.is_empty() {
-        format!("DuckFlight runtime failed with status {}", status.0)
-    } else {
-        message
+    let detail = match error.message() {
+        None => format!(
+            "DuckFlight runtime failed with status {}; diagnostic requires {} bytes (buffer capacity {})",
+            status.0,
+            error.required,
+            error.bytes.len()
+        ),
+        Some(message) if message.is_empty() => {
+            format!("DuckFlight runtime failed with status {}", status.0)
+        }
+        Some(message) => message,
     };
     Err(DynamicCoreError(detail).into())
 }
@@ -354,6 +364,85 @@ fn check_status(status: DuckflightStatus, error: &ErrorBuffer) -> Result<(), Box
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Model the ABI provider's all-or-nothing output behavior used by mock_core.
+    unsafe extern "C" fn report_error(
+        message: DuckflightBytesV1,
+        status: DuckflightStatus,
+        output: *mut DuckflightOutputBufferV1,
+    ) -> DuckflightStatus {
+        let output = unsafe { &mut *output };
+        unsafe { *output.required = message.len };
+        if message.len <= output.capacity && message.len != 0 {
+            unsafe { ptr::copy_nonoverlapping(message.data, output.data, message.len) };
+        }
+        status
+    }
+
+    fn provider_error(message: &str, status: DuckflightStatus) -> String {
+        let mut error = ErrorBuffer::new();
+        let status = unsafe {
+            report_error(
+                DuckflightBytesV1::from_utf8(message),
+                status,
+                error.as_ffi(),
+            )
+        };
+        check_status(status, &error).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn oversized_provider_diagnostic_preserves_status_without_reading_output() {
+        let message = format!("{}é", "a".repeat(ERROR_CAPACITY - 1));
+        // Neither zero-filled storage nor plausible text in unwritten bytes is a diagnostic.
+        for unwritten in [0, b'x'] {
+            let mut error = ErrorBuffer::new();
+            error.bytes.fill(unwritten);
+            let status = unsafe {
+                report_error(
+                    DuckflightBytesV1::from_utf8(&message),
+                    DuckflightStatus::INVALID_ARGUMENT,
+                    error.as_ffi(),
+                )
+            };
+            assert_eq!(status, DuckflightStatus::INVALID_ARGUMENT);
+            assert_eq!(error.bytes, [unwritten; ERROR_CAPACITY]);
+            let detail = check_status(status, &error).unwrap_err().to_string();
+            assert_eq!(
+                detail,
+                "DuckFlight runtime failed with status 1; diagnostic requires 4097 bytes (buffer capacity 4096)"
+            );
+            assert!(std::ffi::CString::new(detail).is_ok());
+        }
+    }
+
+    #[test]
+    fn short_provider_diagnostic_preserves_utf8() {
+        assert_eq!(
+            provider_error(
+                "cannot bind café: 地址 unavailable",
+                DuckflightStatus::INTERNAL
+            ),
+            "cannot bind café: 地址 unavailable"
+        );
+    }
+
+    #[test]
+    fn provider_diagnostic_fits_exactly_at_utf8_boundary() {
+        let message = format!("{}é", "a".repeat(ERROR_CAPACITY - 2));
+        assert_eq!(
+            provider_error(&message, DuckflightStatus::INTERNAL),
+            message
+        );
+    }
+
+    #[test]
+    fn empty_provider_diagnostic_uses_original_status() {
+        assert_eq!(
+            provider_error("", DuckflightStatus::NOT_FOUND),
+            "DuckFlight runtime failed with status 4"
+        );
+    }
 
     #[repr(C)]
     struct ApiHeader {
