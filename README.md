@@ -165,6 +165,27 @@ the process with a failure status. `docker stop` stops listeners and closes the 
 Allow a suitable shutdown timeout for your workload. Use one container per database file;
 do not share a writable DuckDB file between processes.
 
+Client SQL runs with `enable_external_access=false` and `lock_configuration=true`.
+The launcher applies these settings after trusted startup SQL and before opening either
+listener, and replaces `allowed_configs` with only `TimeZone`, needed by PgWire session
+initialization. Startup configuration cannot leave other client exceptions to the lock.
+Startup SQL must leave configuration unlocked so the launcher can apply this final policy;
+prelocked initialization fails before listeners start.
+Clients can set their timezone but cannot enable external access, change resource settings,
+install/load extensions, or read arbitrary local files or remote URLs. Database reads,
+writes, persistence, and spilling remain available. Set resource limits through the
+environment or startup SQL; load any required extensions during startup.
+
+For client file imports/exports, allowlist only dedicated data files or directories in
+`DUCKFLIGHT_INIT_SQL`, for example `set allowed_directories=['/imports'];` for a mounted
+data directory, or `set allowed_paths=['/imports/input.csv'];` for one file. DuckDB also
+automatically permits attached database/WAL files and the configured spill directory.
+Keep databases, spill storage, and every allowed path separate from authentication/TLS
+files and other secrets. Never allowlist `/run/secrets`, a parent such as `/`, or aliases
+to secret files. Startup SQL is trusted operator code and must not start listeners itself
+before the launcher's policy is applied. Use the offline CLI below for unrestricted
+administrative work.
+
 For an offline DuckDB CLI session, stop the server first and attach the same volume:
 
 ```sh
