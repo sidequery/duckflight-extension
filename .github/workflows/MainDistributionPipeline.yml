@@ -20,7 +20,7 @@ jobs:
     # v1.5-variegata, pinned to the same reviewed revision as the submodule.
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@a285602bf745d6ceaa704b5df47f08b00ca296ae
     with:
-      duckdb_version: v1.5.5
+      duckdb_version: v1.5.6
       ci_tools_version: a285602bf745d6ceaa704b5df47f08b00ca296ae
       extension_name: duckflight
       extra_toolchains: rust;python3

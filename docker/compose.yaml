@@ -1,0 +1,19 @@
+services:
+  duckflight:
+    image: duckflight:local
+    build:
+      context: ..
+    ports:
+      - "127.0.0.1:5433:5433"
+      - "127.0.0.1:31337:31337"
+    environment:
+      DUCKFLIGHT_MEMORY_LIMIT: 1GB
+      DUCKFLIGHT_THREADS: "2"
+    volumes:
+      - data:/data
+      - ${DUCKFLIGHT_SECRETS_DIR:?Set DUCKFLIGHT_SECRETS_DIR to your config and certificate directory}:/run/secrets:ro
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  data:

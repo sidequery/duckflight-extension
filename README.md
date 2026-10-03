@@ -6,6 +6,7 @@ Airport. Every client reads and writes the same live database—there is no seco
 no data to export or copy.
 
 - [Install and load](#install-and-load)
+- [Docker](#docker)
 - [SQL API](#sql-api)
 - [Authentication setup](#authentication-setup)
 - [Build and test](#build-and-test)
@@ -90,12 +91,105 @@ load '/absolute/path/to/duckflight-v1.5.5-osx_arm64.duckdb_extension';
 select * from duckflight_core_status();
 ```
 
-Choose the asset matching `linux_amd64`, `linux_arm64`, `osx_amd64`, or `osx_arm64`. The
-`-unsigned` flag weakens DuckDB's extension-signature protection for that process, so use it only
+Choose the asset matching `linux_amd64`, `linux_arm64`, `osx_amd64`, or `osx_arm64`.
+The DuckDB version must also match the asset name; the example above uses the existing 1.5.5
+release artifacts. The Docker image below builds this checkout for DuckDB 1.5.6.
+The `-unsigned` flag weakens DuckDB's extension-signature protection for that process, so use it only
 with an artifact downloaded from this repository's releases and verify its checksum when moving it
 through another system.
 
 </details>
+
+## Docker
+
+The image includes DuckDB **1.5.6** (Python host and CLI) and the current extension built
+from this checkout, with the checksum-pinned production core embedded. It starts both
+PostgreSQL and Flight SQL against one persistent database, runs as UID/GID `10001`,
+and downloads nothing at startup.
+
+Build locally, including the pinned build-tool submodule:
+
+```sh
+git submodule update --init extension-ci-tools
+docker build -t duckflight:local .
+```
+
+Provision a directory containing `duckflight.toml`, its TLS certificate, and private key
+using the [authentication helper](#use-the-helper). Both default listeners bind to
+`0.0.0.0` inside the container, so **authentication and TLS are required**, even when
+Docker publishes ports only on host loopback. Certificate names must match the hostname
+used by clients (for local testing, include `localhost` and `127.0.0.1` in the SAN).
+Keep config and private key mode `0600`, owned by the container UID, and make the
+directory traversable by that UID. Alternatively use `--user UID:GID` with matching
+permissions for the secrets and data directory. Mount the entire secrets directory so
+relative certificate paths continue to work.
+
+```sh
+export DUCKFLIGHT_SECRETS_DIR=/absolute/path/to/duckflight-secrets
+docker compose -f docker/compose.yaml up --build -d
+```
+
+Or run directly:
+
+```sh
+docker run -d --name duckflight \
+  -p 127.0.0.1:5433:5433 -p 127.0.0.1:31337:31337 \
+  --mount type=volume,src=duckflight-data,dst=/data \
+  --mount type=bind,src="$DUCKFLIGHT_SECRETS_DIR",dst=/run/secrets,readonly \
+  -e DUCKFLIGHT_MEMORY_LIMIT=1GB -e DUCKFLIGHT_THREADS=2 \
+  duckflight:local
+```
+
+Wait for `DuckFlight ready` in `docker logs duckflight`. Connect with PostgreSQL
+`sslmode=verify-full` and the issuing CA (`sslrootcert`), or Flight SQL at
+`grpc+tls://localhost:31337` with the issuing CA and configured user/token.
+The [Airport example](#bearer-tokens) uses the same Flight listener.
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `DUCKFLIGHT_DATABASE` | `/data/duckflight.duckdb` | Persistent database path; `:memory:` for an ephemeral database |
+| `DUCKFLIGHT_CONFIG` | `/run/secrets/duckflight.toml` | Mounted authentication/TLS config; never baked into the image |
+| `DUCKFLIGHT_PG_ADDRESS` | `0.0.0.0:5433` | PostgreSQL bind address; empty string disables PostgreSQL |
+| `DUCKFLIGHT_FLIGHT_ADDRESS` | `0.0.0.0:31337` | Flight SQL bind address; empty string disables Flight |
+| `DUCKFLIGHT_MEMORY_LIMIT` | DuckDB default | DuckDB memory limit, e.g. `1GB`; leave room for other process memory |
+| `DUCKFLIGHT_THREADS` | DuckDB default | DuckDB worker threads, e.g. `2` |
+| `DUCKFLIGHT_TEMP_DIRECTORY` | DuckDB default | Writable spill directory; mount separate storage if needed |
+| `DUCKFLIGHT_INIT_SQL` | Unset | Mounted SQL file executed before listeners start **on every startup**; make it idempotent |
+
+At least one protocol must be enabled. Changing bind ports also requires changing Docker's
+port mapping. Authentication, token scopes, and TLS remain authoritative in the TOML file;
+plaintext passwords are not accepted through environment variables. No default credentials
+or automatic self-signed identities are created. Invalid config or failed startup SQL exits
+the process with a failure status. `docker stop` stops listeners and closes the database.
+Allow a suitable shutdown timeout for your workload. Use one container per database file;
+do not share a writable DuckDB file between processes.
+
+For an offline DuckDB CLI session, stop the server first and attach the same volume:
+
+```sh
+docker stop duckflight
+docker run --rm -it --mount type=volume,src=duckflight-data,dst=/data \
+  --entrypoint duckdb duckflight:local -unsigned /data/duckflight.duckdb
+```
+
+Load `/opt/duckflight/duckflight.duckdb_extension` inside that session if needed. The
+source-built extension is unsigned; the server enables unsigned extensions to load its
+bundled artifact. Build inputs include checksum-verified core/CLI downloads and the Cargo
+lockfile. The image contains the core's binary-distribution license.
+
+The Docker workflow builds and smoke-tests Linux amd64 and arm64 natively on pull requests.
+On `main` (or a manual run against `main`) it publishes tested images to
+`ghcr.io/sidequery/duckflight-extension`, with `latest` and full commit-SHA tags. Prefer a
+commit tag or image digest for deployments. The GHCR package is configured for public,
+anonymous pulls, and the publishing workflow checks that both architectures are available
+without registry credentials. Replace `duckflight:local` in the commands above with that
+registry image and tag to consume a published build.
+
+To run the same real-client container checks locally:
+
+```sh
+uv run test/docker_smoke.py duckflight:local
+```
 
 ## SQL API
 
@@ -162,7 +256,7 @@ order by function_name;
 ```
 
 The Community Extensions page collects these comments automatically after loading the extension.
-The five native server-control functions are documented above because DuckDB 1.5.5 does not
+The five native server-control functions are documented above because DuckDB 1.5.6 does not
 expose description setters for C API table functions.
 
 | Area | Useful signatures | Purpose |
@@ -475,7 +569,7 @@ cargo test --workspace
 ```
 
 The distribution workflow uses DuckDB's reusable build, test, metadata, and packaging matrix for
-DuckDB v1.5.5. Generated shared libraries, build trees, and `.duckdb_extension` artifacts are ignored
+DuckDB v1.5.6. Generated shared libraries, build trees, and `.duckdb_extension` artifacts are ignored
 and must not be committed.
 
 The initial Community release supports Linux and macOS on amd64 and arm64. Windows, WebAssembly,

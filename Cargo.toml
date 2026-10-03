@@ -20,7 +20,7 @@ lto = true
 strip = true
 
 [dependencies]
-duckdb = { version = "~1.10505.0", features = ["loadable-extension", "vscalar"] }
+duckdb = { version = "~1.10506.0", features = ["loadable-extension", "vscalar"] }
 duckflight-extension-abi = { path = "crates/duckflight-extension-abi" }
 libloading = "0.8"
 tempfile = "3.27"

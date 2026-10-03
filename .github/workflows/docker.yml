@@ -1,0 +1,77 @@
+name: Docker image
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Build
+        run: docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" --tag duckflight:test .
+      - name: Lint runtime and smoke test
+        run: |
+          uv run --with ruff ruff check docker/server.py test/docker_smoke.py
+          uv run --with ruff ruff format --check docker/server.py test/docker_smoke.py
+      - name: Smoke test
+        run: uv run test/docker_smoke.py duckflight:test
+      - name: Push tested architecture
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker tag duckflight:test "$image:$GITHUB_SHA-$ARCH"
+          docker push "$image:$GITHUB_SHA-$ARCH"
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - name: Publish multi-platform manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx imagetools create \
+            --tag "$image:$GITHUB_SHA" --tag "$image:latest" \
+            "$image:$GITHUB_SHA-amd64" "$image:$GITHUB_SHA-arm64"
+      - name: Verify anonymous pulls for both architectures
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_config"' EXIT
+          docker --config "$anonymous_config" manifest inspect "$image:$GITHUB_SHA" \
+            | jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]'

@@ -1,0 +1,14 @@
+**
+!Cargo.toml
+!Cargo.lock
+!build.rs
+!core-assets.lock
+!LICENSE
+!src/**
+!crates/**
+!test/mock_core/**
+!extension-ci-tools/scripts/**
+!scripts/fetch-core-release.sh
+!docker/
+!docker/server.py
+!docker/cli-assets.lock
