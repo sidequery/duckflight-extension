@@ -31,7 +31,66 @@ case "$(uname -s):$(uname -m)" in
     exit 2
     ;;
 esac
-target_triple="${DUCKFLIGHT_CORE_TARGET:-${target_triple}}"
+host_target="${target_triple}"
+
+# DuckDB metadata and both Cargo invocations must describe the same target.
+# The CI tools normally cross-target only macOS, and metadata is read from
+# configure/platform.txt rather than directly from DUCKDB_PLATFORM.
+platform_target() {
+  case "$1" in
+    osx_arm64) echo aarch64-apple-darwin ;;
+    osx_amd64) echo x86_64-apple-darwin ;;
+    linux_arm64) echo aarch64-unknown-linux-gnu ;;
+    linux_amd64) echo x86_64-unknown-linux-gnu ;;
+    windows_amd64) echo x86_64-pc-windows-msvc ;;
+    *) echo "unsupported bundled-core platform: $1" >&2; return 2 ;;
+  esac
+}
+
+target_platform() {
+  case "$1" in
+    aarch64-apple-darwin) echo osx_arm64 ;;
+    x86_64-apple-darwin) echo osx_amd64 ;;
+    aarch64-unknown-linux-gnu) echo linux_arm64 ;;
+    x86_64-unknown-linux-gnu) echo linux_amd64 ;;
+    x86_64-pc-windows-msvc) echo windows_amd64 ;;
+    *) echo "unsupported bundled-core target: $1" >&2; return 2 ;;
+  esac
+}
+
+platform="${DUCKDB_PLATFORM:-}"
+target_triple="${DUCKFLIGHT_CORE_TARGET:-}"
+if [[ -n "${platform}" ]]; then
+  platform_triple="$(platform_target "${platform}")"
+  if [[ -n "${target_triple}" && "${target_triple}" != "${platform_triple}" ]]; then
+    echo "DUCKDB_PLATFORM=${platform} conflicts with DUCKFLIGHT_CORE_TARGET=${target_triple}" >&2
+    exit 2
+  fi
+  target_triple="${platform_triple}"
+elif [[ -n "${target_triple}" ]]; then
+  platform="$(target_platform "${target_triple}")"
+else
+  target_triple="${host_target}"
+  platform="$(target_platform "${target_triple}")"
+  if [[ -f configure/platform.txt && "$(<configure/platform.txt)" != "${platform}" ]]; then
+    echo "configure/platform.txt does not match host platform ${platform}; set DUCKDB_PLATFORM or rerun make configure" >&2
+    exit 2
+  fi
+fi
+
+# Library filenames and linker setup in the CI tools are selected by the host OS.
+if [[ "${target_triple#*-}" != "${host_target#*-}" ]]; then
+  echo "bundled cross-OS builds are unsupported: ${host_target} -> ${target_triple}" >&2
+  exit 2
+fi
+if [[ ! -f configure/platform.txt ]]; then
+  echo "run make configure before building a bundled extension" >&2
+  exit 2
+fi
+
+# Refresh even when configure contains a prior cross-build platform. Explicit
+# target flags also override Cargo's environment/configured default target.
+make "DUCKDB_PLATFORM=${platform}" platform
 core_target_dir="${DUCKFLIGHT_CORE_TARGET_DIR:-${core_repo}/target/duckflight-extension-bundle}"
 core_remap_prefix="${DUCKFLIGHT_CORE_REMAP_PREFIX:-/src/duckflight-core}"
 
@@ -102,7 +161,9 @@ public_cflags="${CFLAGS:+${CFLAGS} }-ffile-prefix-map=${user_home}=/build/home -
 public_cxxflags="${CXXFLAGS:+${CXXFLAGS} }-ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home -ffile-prefix-map=${public_repo}=/src/duckflight-extension -fdebug-prefix-map=${public_repo}=/src/duckflight-extension"
 
 RUSTFLAGS="${public_rustflags}" CFLAGS="${public_cflags}" CXXFLAGS="${public_cxxflags}" \
-  DUCKFLIGHT_CORE_BUNDLE_PATH="${core_library}" make release
+  DUCKFLIGHT_CORE_BUNDLE_PATH="${core_library}" make \
+    "DUCKDB_PLATFORM=${platform}" "TARGET_INFO=--target ${target_triple}" \
+    "TARGET_PATH=${CARGO_TARGET_DIR:-./target}/${target_triple}" release
 
 for artifact in "${core_library}" build/release/duckflight.duckdb_extension; do
   if strings "${artifact}" | grep -F "${user_home}" >/dev/null; then
