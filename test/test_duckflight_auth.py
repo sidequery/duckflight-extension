@@ -194,6 +194,36 @@ class DuckflightAuthTests(unittest.TestCase):
         )
         self.assertIn(f"sha256:{fingerprint.lower()}", config["tls"]["identities"])
 
+    def test_oidc_and_policy_survive_user_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duckflight.toml"
+            oidc = [{"name": "company", "issuer": "https://issuer.example", "audience": "flight",
+                     "required_claims": {"email_verified": True}, "algorithms": ["ES256"],
+                     "jwks": {"keys": [{"kty": "EC", "kid": "test", "x": "public"}]}}]
+            policy = {"rules": [{"provider": "oidc:company", "group": "readers", "scopes": ["query:execute"]}]}
+            duckflight_auth.write_config(path, {"oidc": oidc, "authorization": policy})
+            duckflight_auth.write_users(path, {"alice": {"password_hash": "00" * 32,
+                                                       "salt": list(range(16)), "iterations": 4096}})
+            config = duckflight_auth.read_config(path)
+            self.assertEqual(config["oidc"], oidc)
+            self.assertEqual(config["authorization"], policy)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_oidc_configuration_fails_closed(self) -> None:
+        provider = {"name": "company", "issuer": "https://issuer.example", "audience": "flight"}
+        invalid = [
+            {"oidc": [dict(provider, algorithms=["none"])]},
+            {"oidc": [dict(provider, jwks_url="http://issuer.example/keys")]},
+            {"oidc": [dict(provider, audience="")]},
+            {"oidc": [dict(provider, typo=True)]},
+            {"oidc": [provider, provider]},
+            {"oidc": [provider], "authorization": {"rules": [{"provider": "oidc:missing", "scopes": ["query:execute"]}]}},
+            {"oidc": [provider], "authorization": {"rules": [{"provider": "oidc:company", "scopes": ["query:typo"]}]}},
+        ]
+        for config in invalid:
+            with self.subTest(config=config), self.assertRaises(duckflight_auth.AuthFileError):
+                duckflight_auth.validate_config(config)
+
 
 if __name__ == "__main__":
     unittest.main()

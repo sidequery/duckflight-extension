@@ -521,6 +521,52 @@ Use a temporary DuckDB secret or a suitably protected persistent secret store. D
 token in `attach`, application logs, or checked-in SQL. Airport's current authentication interface is
 documented by [Query.Farm](https://query.farm/products/extensions/airport/).
 
+#### OIDC providers and authorization
+
+The OIDC and gRPC health configuration below requires a core payload built with the
+extension OIDC/health runtime. The currently pinned `core-v0.1.6` payload does not
+support it; updating the four platform core assets and `core-assets.lock` is required
+before using this configuration in a distributed extension.
+
+Add one `[[oidc]]` entry per provider. Each issuer must be unique. The runtime verifies
+signatures against cached JWKS, refreshes unknown key IDs, and checks issuer, audience,
+expiry, and configured claim restrictions. It supports RS256 and ES256. Use an explicit
+`jwks_url`, an explicit `discovery_url`, or issuer discovery. `jwks` can instead contain
+an inline public JWK set. HTTPS is required; `allow_http = true` is for local test providers.
+
+```toml
+[[oidc]]
+name = "company"
+issuer = "https://identity.example.com"
+audience = "duckflight"
+jwks_url = "https://identity.example.com/.well-known/jwks.json"
+algorithms = ["RS256"]
+
+[[authorization.rules]]
+provider = "oidc:company"
+group = "analytics"
+scopes = ["query:execute", "transaction:manage"]
+```
+
+Every rule must name a configured `oidc:<name>`. Optional `subject`, `group`, and
+`tenant` selectors must all match. Matching rules add their scopes; an identity with no
+matching rule receives no local query privileges. Provider `scope` and `roles` claims do
+not directly grant DuckFlight privileges. Supported local scopes are `query:execute`,
+`query:mutate`, `query:ingest`, `query:admin`, and `transaction:manage`.
+
+Flight clients send the provider's access token in `authorization: Bearer <token>` on
+each RPC. PgWire clients supporting SASL OAUTHBEARER can use the same providers.
+OIDC does not remove the TLS requirement outside loopback. Existing users, static Flight
+tokens, and mTLS identity mappings can coexist with OIDC. Process authentication environment
+variables are not merged into this file. The helper validates and preserves these tables
+when changing users or static tokens; it does not acquire provider tokens.
+
+The Flight listener serves standard `grpc.health.v1.Health` Check and Watch RPCs for
+both the empty service name and `arrow.flight.protocol.FlightService`. These probes
+require no bearer token, use the listener's TLS/client-certificate transport policy,
+and expose only readiness. They become serving after listener initialization and
+not-serving when stopping. Unknown service names return the standard health response.
+
 #### Optional mTLS
 
 mTLS is an advanced alternative for deployments that manage client certificates:
