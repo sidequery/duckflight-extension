@@ -16,6 +16,7 @@ from typing import Self
 
 import duckdb
 import psycopg
+import pyarrow as pa
 from google.protobuf.any_pb2 import Any as ProtobufAny
 from pyarrow import flight
 
@@ -124,7 +125,7 @@ def assert_fresh(session: Session) -> None:
     )
     try:
         session.query("execute session_private_statement")
-    except flight.FlightError as error:
+    except (flight.FlightError, pa.ArrowInvalid) as error:
         message = str(error).lower()
         if "prepared statement" not in message or "does not exist" not in message:
             raise
@@ -215,6 +216,79 @@ def check_simultaneous_sessions(address: str) -> None:
             "second session",
         )
     print("PASS simultaneous sessions have independent state", flush=True)
+
+
+def check_execution_deadline(host: duckdb.DuckDBPyConnection, config: Path) -> None:
+    deadline_config = config.with_name("deadline.toml")
+    deadline_config.write_text(
+        config.read_text() + "\n[flight]\nquery_timeout_ms = 25\n"
+    )
+    deadline_config.chmod(0o600)
+    address = host.execute(
+        "select address from duckflight_flight_serve('127.0.0.1:0', ?)",
+        [str(deadline_config)],
+    ).fetchone()[0]
+    try:
+        with Session(address) as session:
+            try:
+                session.query(
+                    "select sum(a.i * b.i) from range(1000000) a(i), range(1000000) b(i)"
+                )
+            except flight.FlightTimedOutError as error:
+                if "Flight SQL execution deadline exceeded" not in str(error):
+                    raise
+            else:
+                raise AssertionError("configured Flight execution deadline was ignored")
+            session.query("set query_timeout = 0")
+            assert_equal(
+                session.query("select 42 as value"),
+                [{"value": 42}],
+                "session remains usable after execution timeout",
+            )
+    finally:
+        host.execute("select * from duckflight_stop('flight', ?)", [address]).fetchall()
+    print("PASS configured execution deadline and session reuse", flush=True)
+
+
+def check_named_statement_metadata(address: str) -> None:
+    with Session(address) as session:
+        session.query("create temp sequence metadata_sequence start 1")
+        session.query("prepare metadata_statement as select $1::bigint as value")
+        try:
+            session.client.get_schema(
+                command(
+                    "explain execute metadata_statement(nextval('metadata_sequence'))"
+                ),
+                session.options,
+            )
+        except (flight.FlightError, pa.ArrowInvalid) as error:
+            if "literal" not in str(error).lower():
+                raise
+        else:
+            raise AssertionError("metadata preparation accepted an EXECUTE expression")
+        assert_equal(
+            session.query("select nextval('metadata_sequence') as value"),
+            [{"value": 1}],
+            "metadata inspection preserves sequence state",
+        )
+        assert_equal(
+            session.query("execute metadata_statement(42)"),
+            [{"value": 42}],
+            "session remains usable after rejected metadata inspection",
+        )
+        session.query("create temp table eager_named_write(value bigint)")
+        session.query(
+            "prepare named_insert as insert into eager_named_write values ($1)"
+        )
+        session.client.get_flight_info(
+            command("execute named_insert(7)"), session.options
+        )
+        assert_equal(
+            session.query("select value from eager_named_write"),
+            [{"value": 7}],
+            "named write completes without fetching its receipt",
+        )
+    print("PASS SQL named statement metadata purity and eager writes", flush=True)
 
 
 def check_independent_listener_lifetimes(
@@ -321,6 +395,7 @@ def run(extension: Path) -> None:
                 ).fetchone()[0]
                 check_repeated_sessions(host, address)
                 check_simultaneous_sessions(address)
+                check_named_statement_metadata(address)
                 host.execute(
                     "select * from duckflight_stop('flight', ?)", [address]
                 ).fetchall()
@@ -339,6 +414,7 @@ def run(extension: Path) -> None:
                         "restart preserves host database",
                     )
                 print("PASS server restart retains access to host database", flush=True)
+                check_execution_deadline(host, config)
                 check_independent_listener_lifetimes(host, config)
             finally:
                 if address is not None:
