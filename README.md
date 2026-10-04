@@ -523,11 +523,6 @@ documented by [Query.Farm](https://query.farm/products/extensions/airport/).
 
 #### OIDC providers and authorization
 
-The OIDC and gRPC health configuration below requires a core payload built with the
-extension OIDC/health runtime. The currently pinned `core-v0.1.6` payload does not
-support it; updating the four platform core assets and `core-assets.lock` is required
-before using this configuration in a distributed extension.
-
 Add one `[[oidc]]` entry per provider. Each issuer must be unique. The runtime verifies
 signatures against cached JWKS, refreshes unknown key IDs, and checks issuer, audience,
 expiry, and configured claim restrictions. It supports RS256 and ES256. Use an explicit
@@ -570,9 +565,8 @@ not-serving when stopping. Unknown service names return the standard health resp
 
 #### Flight session limits and listener shutdown
 
-These settings require the same new core payload described above. Put the shutdown option
-before any TOML table header. Explicit values override the core's corresponding environment
-defaults; omitted options retain those defaults.
+Put the shutdown option before any TOML table header. Explicit values override the
+corresponding environment defaults; omitted options retain those defaults.
 
 ```toml
 shutdown_grace_secs = 30
