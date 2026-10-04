@@ -375,7 +375,7 @@ def run(image: str, startup_timeout: float) -> None:
                         lambda sql: flight_query(client, options, sql),
                         sql,
                         flight.FlightError,
-                        "failed to infer query schema",
+                        "permission",
                     )
                 for sql in CONFIG_BYPASSES + CONFIG_RESETS:
                     denied(
@@ -393,7 +393,7 @@ def run(image: str, startup_timeout: float) -> None:
                         lambda sql: flight_query(client, read_options, sql),
                         sql,
                         flight.FlightError,
-                        "failed to infer query schema",
+                        "permission",
                     )
                 assert flight_query(
                     client, read_options, "select id from smoke_rows"
@@ -432,7 +432,7 @@ def run(image: str, startup_timeout: float) -> None:
                     lambda sql: flight_query(client, options, sql),
                     SECRET_QUERIES[1],
                     flight.FlightError,
-                    "failed to infer query schema",
+                    "permission",
                 )
             stop(container)
             container = start("DUCKFLIGHT_FLIGHT_ADDRESS=")
