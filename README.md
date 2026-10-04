@@ -9,6 +9,7 @@ no data to export or copy.
 - [Docker](#docker)
 - [SQL API](#sql-api)
 - [Authentication setup](#authentication-setup)
+- [Observability](#observability)
 - [Build and test](#build-and-test)
 - [Security](#security)
 - [License](#license)
@@ -566,6 +567,22 @@ Starting, listing, and stopping listeners requires ordinary SQL access to the lo
 host that accepts untrusted SQL, isolate each tenant in a separate DuckDB process and control whether
 the extension is installed or loaded. Listener authentication is not a substitute for process
 isolation or SQL authorization inside the host DuckDB process.
+
+## Observability
+
+Version 0.1.8 adds optional OTLP traces, metrics, query-completion logs, and sampled
+DuckDB execution profiles for both listeners. Set configuration before `load duckflight`:
+
+```sh
+export DUCKFLIGHT_TELEMETRY_ENABLED=true
+export DUCKFLIGHT_OTLP_PROTOCOL=http/protobuf
+export DUCKFLIGHT_OTLP_ENDPOINT=http://127.0.0.1:4318
+export DUCKFLIGHT_PROFILE_MODE=detailed
+export DUCKFLIGHT_PROFILE_SAMPLE_RATIO=0.05
+```
+
+Both features are off by default. See [observability configuration](docs/OBSERVABILITY.md)
+for signal controls, sampling, resource identity, profile limits, and measurement boundaries.
 
 ## Build and test
 
