@@ -521,6 +521,71 @@ Use a temporary DuckDB secret or a suitably protected persistent secret store. D
 token in `attach`, application logs, or checked-in SQL. Airport's current authentication interface is
 documented by [Query.Farm](https://query.farm/products/extensions/airport/).
 
+#### OIDC providers and authorization
+
+Add one `[[oidc]]` entry per provider. Each issuer must be unique. The runtime verifies
+signatures against cached JWKS, refreshes unknown key IDs, and checks issuer, audience,
+expiry, and configured claim restrictions. It supports RS256 and ES256. Use an explicit
+`jwks_url`, an explicit `discovery_url`, or issuer discovery. `jwks` can instead contain
+an inline public JWK set. HTTPS is required; `allow_http = true` is for local test providers.
+
+```toml
+[[oidc]]
+name = "company"
+issuer = "https://identity.example.com"
+audience = "duckflight"
+jwks_url = "https://identity.example.com/.well-known/jwks.json"
+algorithms = ["RS256"]
+
+[[authorization.rules]]
+provider = "oidc:company"
+group = "analytics"
+scopes = ["query:execute", "transaction:manage"]
+```
+
+Every rule must name a configured `oidc:<name>`. Optional `subject`, `group`, and
+`tenant` selectors must all match. Matching rules add their scopes; an identity with no
+matching rule receives no local query privileges. Provider `scope` and `roles` claims do
+not directly grant DuckFlight privileges. Supported local scopes are `query:execute`,
+`query:mutate`, `query:ingest`, `query:admin`, and `transaction:manage`.
+
+Flight clients send the provider's access token in `authorization: Bearer <token>` on
+each RPC. PgWire clients supporting SASL OAUTHBEARER can use the same providers.
+OIDC does not remove the TLS requirement outside loopback. Existing users, static Flight
+tokens, and mTLS identity mappings can coexist with OIDC. Process authentication environment
+variables are not merged into this file. The helper checks key structure and usable signing-key
+selection and preserves these tables when changing users or static tokens. Cryptographic key
+validation and provider availability remain runtime checks; the helper does not acquire tokens.
+
+The Flight listener serves standard `grpc.health.v1.Health` Check and Watch RPCs for
+both the empty service name and `arrow.flight.protocol.FlightService`. These probes
+require no bearer token, use the listener's TLS/client-certificate transport policy,
+and expose only readiness. They become serving after listener initialization and
+not-serving when stopping. Unknown service names return the standard health response.
+
+#### Flight session limits and listener shutdown
+
+Put the shutdown option before any TOML table header. Explicit values override the
+corresponding environment defaults; omitted options retain those defaults.
+
+```toml
+shutdown_grace_secs = 30
+
+[flight]
+max_sessions = 10000
+session_timeout_ms = 0
+transaction_timeout_ms = 0
+query_timeout_ms = 0
+```
+
+`max_sessions` must be positive. Session and transaction timeouts are idle limits;
+`query_timeout_ms` is the execution deadline. Zero disables each timeout. A session can
+override its query deadline through the Flight `query_timeout` option or SQL
+`set query_timeout = '5s'`; `reset query_timeout` restores the server default.
+Shutdown rejects new work while allowing admitted queries and result fetches to finish
+within the grace period, then interrupts outstanding execution. Zero grace forces immediate
+shutdown. Stopping one listener leaves other listeners running.
+
 #### Optional mTLS
 
 mTLS is an advanced alternative for deployments that manage client certificates:
@@ -606,7 +671,7 @@ An authorized release build embeds the private core directly into the extension:
 
 See [docs/BUNDLED_CORE.md](docs/BUNDLED_CORE.md) for the local build and per-platform GitHub Release
 asset model. The platform payloads are published in the
-[`core-v0.1.6` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.6)
+[`core-v0.1.8` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.8)
 and checksum-pinned in `core-assets.lock`.
 
 <details>

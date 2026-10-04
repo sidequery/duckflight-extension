@@ -15,6 +15,16 @@ assert SPEC is not None and SPEC.loader is not None
 duckflight_auth = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(duckflight_auth)
 
+# Public P-256 key generated with OpenSSL; no private material is retained.
+PUBLIC_JWK = {
+    "kty": "EC",
+    "kid": "test",
+    "crv": "P-256",
+    "alg": "ES256",
+    "x": "NWH-h42o7YC9dM0DGTVsQki1T-k5-GFG76X_KXerILI",
+    "y": "V3fOoVGYKAO_zaJSPQUBV-nQfnUBC6EOcFUBYQ-Jx8A",
+}
+
 
 class DuckflightAuthTests(unittest.TestCase):
     def test_known_scram_sha256_vector(self) -> None:
@@ -193,6 +203,190 @@ class DuckflightAuthTests(unittest.TestCase):
             }
         )
         self.assertIn(f"sha256:{fingerprint.lower()}", config["tls"]["identities"])
+
+    def test_oidc_and_policy_survive_user_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duckflight.toml"
+            oidc = [
+                {
+                    "name": "company",
+                    "issuer": "https://issuer.example",
+                    "audience": "flight",
+                    "required_claims": {"email_verified": True},
+                    "algorithms": ["ES256"],
+                    "jwks": {"keys": [PUBLIC_JWK]},
+                }
+            ]
+            policy = {
+                "rules": [
+                    {
+                        "provider": "oidc:company",
+                        "group": "readers",
+                        "scopes": ["query:execute"],
+                    }
+                ]
+            }
+            duckflight_auth.write_config(path, {"oidc": oidc, "authorization": policy})
+            duckflight_auth.write_users(
+                path,
+                {
+                    "alice": {
+                        "password_hash": "00" * 32,
+                        "salt": list(range(16)),
+                        "iterations": 4096,
+                    }
+                },
+            )
+            config = duckflight_auth.read_config(path)
+            self.assertEqual(config["oidc"], oidc)
+            self.assertEqual(config["authorization"], policy)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_oidc_configuration_fails_closed(self) -> None:
+        provider = {
+            "name": "company",
+            "issuer": "https://issuer.example",
+            "audience": "flight",
+        }
+        invalid = [
+            {"oidc": [dict(provider, algorithms=["none"])]},
+            {"oidc": [dict(provider, jwks_url="http://issuer.example/keys")]},
+            {"oidc": [dict(provider, audience="")]},
+            {"oidc": [dict(provider, typo=True)]},
+            {"oidc": [provider, provider]},
+            {
+                "oidc": [provider],
+                "authorization": {
+                    "rules": [{"provider": "oidc:missing", "scopes": ["query:execute"]}]
+                },
+            },
+            {
+                "oidc": [provider],
+                "authorization": {
+                    "rules": [{"provider": "oidc:company", "scopes": ["query:typo"]}]
+                },
+            },
+        ]
+        for config in invalid:
+            with (
+                self.subTest(config=config),
+                self.assertRaises(duckflight_auth.AuthFileError),
+            ):
+                duckflight_auth.validate_config(config)
+
+    def test_static_jwks_rejects_malformed_or_unusable_keys(self) -> None:
+        provider = {
+            "name": "company",
+            "issuer": "https://issuer.example",
+            "audience": "flight",
+            "algorithms": ["ES256"],
+        }
+        invalid = [
+            [1],
+            [{}],
+            [PUBLIC_JWK, PUBLIC_JWK],
+            [dict(PUBLIC_JWK, kty="oct")],
+            [dict(PUBLIC_JWK, crv="P-384")],
+            [dict(PUBLIC_JWK, kid="")],
+            [dict(PUBLIC_JWK, kid=1)],
+            [dict(PUBLIC_JWK, use="enc")],
+            [dict(PUBLIC_JWK, key_ops=["sign"])],
+            [dict(PUBLIC_JWK, key_ops="verify")],
+            [dict(PUBLIC_JWK, key_ops=[1])],
+            [dict(PUBLIC_JWK, alg="RS256")],
+            [dict(PUBLIC_JWK, x="a!")],
+            [{key: value for key, value in PUBLIC_JWK.items() if key != "y"}],
+        ]
+        for keys in invalid:
+            with (
+                self.subTest(keys=keys),
+                self.assertRaises(duckflight_auth.AuthFileError),
+            ):
+                duckflight_auth.validate_config(
+                    {"oidc": [dict(provider, jwks={"keys": keys})]}
+                )
+        with self.assertRaisesRegex(duckflight_auth.AuthFileError, "no usable"):
+            duckflight_auth.validate_config(
+                {
+                    "oidc": [
+                        dict(
+                            provider, algorithms=["RS256"], jwks={"keys": [PUBLIC_JWK]}
+                        )
+                    ]
+                }
+            )
+
+    def test_static_jwks_preserves_unused_provider_keys(self) -> None:
+        keys = [
+            PUBLIC_JWK,
+            dict(PUBLIC_JWK, use="enc"),
+            dict(PUBLIC_JWK, key_ops=["sign"]),
+        ]
+        provider = {
+            "name": "company",
+            "issuer": "https://issuer.example",
+            "audience": "flight",
+            "algorithms": ["ES256"],
+            "jwks": {"keys": keys},
+        }
+        config = duckflight_auth.validate_config({"oidc": [provider]})
+        self.assertEqual(config["oidc"][0]["jwks"]["keys"], keys)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duckflight.toml"
+            duckflight_auth.write_config(path, config)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(
+                    duckflight_auth.main(["check", "--file", str(path)]), 0
+                )
+            self.assertIn("structurally valid", output.getvalue())
+            self.assertIn("verified by the runtime", output.getvalue())
+
+    def test_runtime_options_survive_user_edits(self) -> None:
+        flight = {
+            "max_sessions": 20,
+            "session_timeout_ms": 60000,
+            "transaction_timeout_ms": 5000,
+            "query_timeout_ms": 100,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duckflight.toml"
+            duckflight_auth.write_config(
+                path, {"shutdown_grace_secs": 0, "flight": flight}
+            )
+            duckflight_auth.write_users(
+                path,
+                {
+                    "alice": {
+                        "password_hash": "00" * 32,
+                        "salt": list(range(16)),
+                        "iterations": 4096,
+                    }
+                },
+            )
+            config = duckflight_auth.read_config(path)
+            self.assertEqual(config["flight"], flight)
+            self.assertEqual(config["shutdown_grace_secs"], 0)
+
+    def test_runtime_options_reject_wrong_units_and_invalid_values(self) -> None:
+        invalid = [
+            {"flight": {"query_timeout": "1s"}},
+            {"flight": []},
+            {"flight": {"max_sessions": 0}},
+        ]
+        for value in (-1, True, 1.5, "30", 1 << 63):
+            invalid.extend(
+                [
+                    {"shutdown_grace_secs": value},
+                    {"flight": {"query_timeout_ms": value}},
+                ]
+            )
+        for config in invalid:
+            with (
+                self.subTest(config=config),
+                self.assertRaises(duckflight_auth.AuthFileError),
+            ):
+                duckflight_auth.validate_config(config)
 
 
 if __name__ == "__main__":

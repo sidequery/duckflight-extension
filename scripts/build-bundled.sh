@@ -121,6 +121,16 @@ core_rustflags="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${user_home}=/bui
 core_cflags="${CFLAGS:+${CFLAGS} }-ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home -ffile-prefix-map=${core_repo}=${core_remap_prefix} -fdebug-prefix-map=${core_repo}=${core_remap_prefix}"
 core_cxxflags="${CXXFLAGS:+${CXXFLAGS} }-ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home -ffile-prefix-map=${core_repo}=${core_remap_prefix} -fdebug-prefix-map=${core_repo}=${core_remap_prefix}"
 
+# The native host ownership bridge must use the exact verified DuckDB headers.
+# Keep version and checksum selection in the core repository's build helper.
+headers_helper="${core_repo}/scripts/prepare-extension-core-headers.sh"
+if [[ ! -f "${headers_helper}" ]]; then
+  echo "missing DuckFlight core header preparation helper: ${headers_helper}" >&2
+  exit 2
+fi
+core_include_dir="$(bash "${headers_helper}" "${core_target_dir}")"
+
+DUCKFLIGHT_DUCKDB_INCLUDE_DIR="${core_include_dir}" \
 RUSTFLAGS="${core_rustflags}" CFLAGS="${core_cflags}" CXXFLAGS="${core_cxxflags}" "${cargo_build[@]}" \
   --manifest-path "${core_manifest}" \
   --release \
