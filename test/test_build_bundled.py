@@ -38,7 +38,7 @@ class BundledTargetTests(unittest.TestCase):
         self.headers_helper = self.core / "scripts/prepare-extension-core-headers.sh"
         self.headers_helper.parent.mkdir()
         self.headers_helper.write_text(
-            '#!/bin/bash\nset -eu\n'
+            "#!/bin/bash\nset -eu\n"
             'printf "%s\\n" "$1" > "$HEADERS_LOG"\n'
             'headers="${DUCKFLIGHT_DUCKDB_INCLUDE_DIR:-$1/verified-headers}"\n'
             'mkdir -p "$headers"\n'
@@ -163,7 +163,8 @@ output.write_bytes(data)
 
     def test_explicit_header_directory(self) -> None:
         self.assert_build(
-            "osx_arm64", "aarch64-apple-darwin",
+            "osx_arm64",
+            "aarch64-apple-darwin",
             DUCKFLIGHT_DUCKDB_INCLUDE_DIR=str(self.root / "header override"),
         )
 
@@ -171,7 +172,9 @@ output.write_bytes(data)
         self.headers_helper.unlink()
         result = self.run_build()
         self.assertEqual(result.returncode, 2)
-        self.assertIn("missing DuckFlight core header preparation helper", result.stderr)
+        self.assertIn(
+            "missing DuckFlight core header preparation helper", result.stderr
+        )
         self.assertFalse((self.root / "build.log").exists())
 
     def test_failed_header_verification_stops_before_compiling(self) -> None:

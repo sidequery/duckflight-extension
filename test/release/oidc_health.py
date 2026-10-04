@@ -70,15 +70,24 @@ def run(extension: Path) -> None:
 
     def token(group: str, audience: str = "flight") -> str:
         return jwt.encode(
-            {"iss": issuer, "aud": audience, "sub": "alice", "groups": [group],
-             "scope": "query:admin query:execute", "exp": int(time.time()) + 300},
-            key, algorithm="ES256", headers={"kid": "test"},
+            {
+                "iss": issuer,
+                "aud": audience,
+                "sub": "alice",
+                "groups": [group],
+                "scope": "query:admin query:execute",
+                "exp": int(time.time()) + 300,
+            },
+            key,
+            algorithm="ES256",
+            headers={"kid": "test"},
         )
 
     try:
-        with tempfile.TemporaryDirectory() as directory, duckdb.connect(
-            config={"allow_unsigned_extensions": "true"}
-        ) as host:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            duckdb.connect(config={"allow_unsigned_extensions": "true"}) as host,
+        ):
             config = Path(directory) / "auth.toml"
             config.write_text(f'''[[oidc]]
 name = "test"
@@ -100,37 +109,60 @@ scopes = ["query:execute"]
             ).fetchone()[0]
             with flight.FlightClient(f"grpc://{address}") as client:
                 try:
-                    list(client.list_flights(options=flight.FlightCallOptions(timeout=5)))
+                    list(
+                        client.list_flights(options=flight.FlightCallOptions(timeout=5))
+                    )
                 except flight.FlightUnauthenticatedError:
                     pass
                 else:
-                    raise AssertionError("legacy environment flag disabled extension authentication")
+                    raise AssertionError(
+                        "legacy environment flag disabled extension authentication"
+                    )
                 assert query(client, token("readers")) == [{"answer": 42}]
                 for bearer in (token("outsiders"), token("readers", "wrong")):
                     try:
                         query(client, bearer)
-                    except (flight.FlightUnauthorizedError, flight.FlightUnauthenticatedError):
+                    except (
+                        flight.FlightUnauthorizedError,
+                        flight.FlightUnauthenticatedError,
+                    ):
                         pass
                     else:
-                        raise AssertionError("invalid credentials/policy unexpectedly allowed query")
-            with grpc.insecure_channel(address) as channel, ThreadPoolExecutor(1) as executor:
+                        raise AssertionError(
+                            "invalid credentials/policy unexpectedly allowed query"
+                        )
+            with (
+                grpc.insecure_channel(address) as channel,
+                ThreadPoolExecutor(1) as executor,
+            ):
                 health = health_pb2_grpc.HealthStub(channel)
                 for service in ("", SERVICE):
-                    result = health.Check(health_pb2.HealthCheckRequest(service=service), timeout=5)
+                    result = health.Check(
+                        health_pb2.HealthCheckRequest(service=service), timeout=5
+                    )
                     assert result.status == health_pb2.HealthCheckResponse.SERVING
-                watch = health.Watch(health_pb2.HealthCheckRequest(service=SERVICE), timeout=10)
+                watch = health.Watch(
+                    health_pb2.HealthCheckRequest(service=SERVICE), timeout=10
+                )
                 assert next(watch).status == health_pb2.HealthCheckResponse.SERVING
 
                 def observe_stop() -> None:
                     try:
-                        assert next(watch).status == health_pb2.HealthCheckResponse.NOT_SERVING
+                        assert (
+                            next(watch).status
+                            == health_pb2.HealthCheckResponse.NOT_SERVING
+                        )
                     finally:
                         watch.cancel()
 
                 stopped = executor.submit(observe_stop)
-                host.execute("select * from duckflight_stop('flight', ?)", [address]).fetchall()
+                host.execute(
+                    "select * from duckflight_stop('flight', ?)", [address]
+                ).fetchall()
                 stopped.result(timeout=5)
-            print("PASS signed JWKS access, policy denial, wrong audience, health Check/Watch lifecycle")
+            print(
+                "PASS signed JWKS access, policy denial, wrong audience, health Check/Watch lifecycle"
+            )
     finally:
         provider.shutdown()
         provider.server_close()

@@ -217,11 +217,15 @@ def check_simultaneous_sessions(address: str) -> None:
     print("PASS simultaneous sessions have independent state", flush=True)
 
 
-def check_independent_listener_lifetimes(host: duckdb.DuckDBPyConnection, config: Path) -> None:
+def check_independent_listener_lifetimes(
+    host: duckdb.DuckDBPyConnection, config: Path
+) -> None:
     addresses: dict[str, str] = {}
 
     def start(protocol: str) -> str:
-        function = "duckflight_flight_serve" if protocol == "flight" else "duckflight_pg_serve"
+        function = (
+            "duckflight_flight_serve" if protocol == "flight" else "duckflight_pg_serve"
+        )
         address = host.execute(
             f"select address from {function}('127.0.0.1:0', ?)", [str(config)]
         ).fetchone()[0]
@@ -229,14 +233,22 @@ def check_independent_listener_lifetimes(host: duckdb.DuckDBPyConnection, config
         return address
 
     def stop(protocol: str) -> None:
-        host.execute("select * from duckflight_stop(?, ?)", [protocol, addresses[protocol]]).fetchall()
+        host.execute(
+            "select * from duckflight_stop(?, ?)", [protocol, addresses[protocol]]
+        ).fetchall()
         del addresses[protocol]
 
     def connect_pg() -> psycopg.Connection:
         hostname, port = addresses["pgwire"].rsplit(":", 1)
-        return psycopg.connect(host=hostname, port=int(port), user=USERNAME,
-                               password=PASSWORD, dbname="duckflight", autocommit=True,
-                               connect_timeout=10)
+        return psycopg.connect(
+            host=hostname,
+            port=int(port),
+            user=USERNAME,
+            password=PASSWORD,
+            dbname="duckflight",
+            autocommit=True,
+            connect_timeout=10,
+        )
 
     try:
         start("flight")
@@ -244,21 +256,33 @@ def check_independent_listener_lifetimes(host: duckdb.DuckDBPyConnection, config
         with connect_pg() as pg:
             pg.execute("create temp table pg_survivor as select 31 as value")
             stop("flight")
-            assert_equal(pg.execute("select value from pg_survivor").fetchone(),
-                         (31,), "PgWire session survives Flight shutdown")
+            assert_equal(
+                pg.execute("select value from pg_survivor").fetchone(),
+                (31,),
+                "PgWire session survives Flight shutdown",
+            )
             start("flight")
             with Session(addresses["flight"]) as session:
-                assert_equal(session.query("select 42 as value"), [{"value": 42}],
-                             "restarted Flight accepts work")
+                assert_equal(
+                    session.query("select 42 as value"),
+                    [{"value": 42}],
+                    "restarted Flight accepts work",
+                )
         with Session(addresses["flight"]) as session:
             session.query("create temp table flight_survivor as select 37 as value")
             stop("pgwire")
-            assert_equal(session.query("select value from flight_survivor"), [{"value": 37}],
-                         "Flight session survives PgWire shutdown")
+            assert_equal(
+                session.query("select value from flight_survivor"),
+                [{"value": 37}],
+                "Flight session survives PgWire shutdown",
+            )
             start("pgwire")
             with connect_pg() as pg:
-                assert_equal(pg.execute("select 43").fetchone(), (43,),
-                             "restarted PgWire accepts work")
+                assert_equal(
+                    pg.execute("select 43").fetchone(),
+                    (43,),
+                    "restarted PgWire accepts work",
+                )
     finally:
         for protocol in list(addresses):
             stop(protocol)

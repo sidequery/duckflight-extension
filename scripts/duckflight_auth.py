@@ -193,7 +193,11 @@ def _validated_tls(value: Any) -> dict[str, Any]:
 
 def _validate_static_jwks(jwks: Any, algorithms: list[str]) -> None:
     """Check key shape and the runtime's signing-key selection, not cryptography."""
-    if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list) or not jwks["keys"]:
+    if (
+        not isinstance(jwks, dict)
+        or not isinstance(jwks.get("keys"), list)
+        or not jwks["keys"]
+    ):
         raise AuthFileError("oidc.jwks requires a nonempty keys array")
     usable_ids: set[str] = set()
     for key in jwks["keys"]:
@@ -207,16 +211,34 @@ def _validate_static_jwks(jwks: Any, algorithms: list[str]) -> None:
             or any(not isinstance(operation, str) for operation in key["key_ops"])
         ):
             raise AuthFileError("oidc.jwks key_ops must be an array of strings")
-        for field in ("n", "e", "x", "y", "d", "p", "q", "dp", "dq", "qi", "k", "x5t", "x5t#S256"):
+        for field in (
+            "n",
+            "e",
+            "x",
+            "y",
+            "d",
+            "p",
+            "q",
+            "dp",
+            "dq",
+            "qi",
+            "k",
+            "x5t",
+            "x5t#S256",
+        ):
             if field not in key:
                 continue
             value = key[field]
             if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
                 raise AuthFileError(f"oidc.jwks key {field} must be unpadded base64url")
             try:
-                base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+                base64.b64decode(
+                    value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
+                )
             except (ValueError, binascii.Error) as error:
-                raise AuthFileError(f"oidc.jwks key {field} must be unpadded base64url") from error
+                raise AuthFileError(
+                    f"oidc.jwks key {field} must be unpadded base64url"
+                ) from error
         kid = key.get("kid")
         if not kid or key.get("use", "sig") != "sig":
             continue
@@ -243,9 +265,22 @@ def _validated_oidc(providers: Any) -> list[dict[str, Any]]:
     if not isinstance(providers, list):
         raise AuthFileError("oidc must be an array of tables")
     allowed = {
-        "name", "issuer", "audience", "audiences", "subject_claims", "jwks",
-        "jwks_url", "discovery_url", "allow_http", "algorithms", "groups_claim",
-        "tenant_claim", "roles_claim", "access_token_type", "token_use", "required_claims",
+        "name",
+        "issuer",
+        "audience",
+        "audiences",
+        "subject_claims",
+        "jwks",
+        "jwks_url",
+        "discovery_url",
+        "allow_http",
+        "algorithms",
+        "groups_claim",
+        "tenant_claim",
+        "roles_claim",
+        "access_token_type",
+        "token_use",
+        "required_claims",
     }
     names, issuers = set(), set()
     for provider in providers:
@@ -273,25 +308,48 @@ def _validated_oidc(providers: Any) -> list[dict[str, Any]]:
                 url = urlsplit(value)
             except ValueError as error:
                 raise AuthFileError(f"oidc.{field} must be a valid URL") from error
-            schemes = {"https", "http"} if provider.get("allow_http", False) else {"https"}
-            if url.scheme not in schemes or not url.hostname or url.username or url.password:
-                raise AuthFileError(f"oidc.{field} requires an HTTPS URL (HTTP needs allow_http)")
+            schemes = (
+                {"https", "http"} if provider.get("allow_http", False) else {"https"}
+            )
+            if (
+                url.scheme not in schemes
+                or not url.hostname
+                or url.username
+                or url.password
+            ):
+                raise AuthFileError(
+                    f"oidc.{field} requires an HTTPS URL (HTTP needs allow_http)"
+                )
         for field in ("audiences", "subject_claims", "algorithms"):
             if field in provider and (
                 not isinstance(provider[field], list)
                 or not provider[field]
-                or any(not isinstance(item, str) or not item.strip() for item in provider[field])
+                or any(
+                    not isinstance(item, str) or not item.strip()
+                    for item in provider[field]
+                )
             ):
                 raise AuthFileError(f"oidc.{field} requires nonempty strings")
-        for field in ("audience", "groups_claim", "tenant_claim", "roles_claim", "access_token_type", "token_use"):
-            if field in provider and (not isinstance(provider[field], str) or not provider[field].strip()):
+        for field in (
+            "audience",
+            "groups_claim",
+            "tenant_claim",
+            "roles_claim",
+            "access_token_type",
+            "token_use",
+        ):
+            if field in provider and (
+                not isinstance(provider[field], str) or not provider[field].strip()
+            ):
                 raise AuthFileError(f"oidc.{field} must be a nonempty string")
         if not provider.get("audience") and not provider.get("audiences"):
             raise AuthFileError("oidc requires audience or audiences")
         if set(provider.get("algorithms", ["RS256"])) - {"RS256", "ES256"}:
             raise AuthFileError("oidc algorithms must be RS256 or ES256")
         if "jwks" in provider:
-            _validate_static_jwks(provider["jwks"], provider.get("algorithms", ["RS256"]))
+            _validate_static_jwks(
+                provider["jwks"], provider.get("algorithms", ["RS256"])
+            )
         if "required_claims" in provider and (
             not isinstance(provider["required_claims"], dict)
             or any(not key.strip() for key in provider["required_claims"])
@@ -300,7 +358,9 @@ def _validated_oidc(providers: Any) -> list[dict[str, Any]]:
     return providers
 
 
-def _validated_authorization(value: Any, providers: list[dict[str, Any]]) -> dict[str, Any]:
+def _validated_authorization(
+    value: Any, providers: list[dict[str, Any]]
+) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) - {"rules"}:
         raise AuthFileError("authorization must contain only rules")
     rules = value.get("rules", [])
@@ -308,12 +368,22 @@ def _validated_authorization(value: Any, providers: list[dict[str, Any]]) -> dic
         raise AuthFileError("authorization.rules must be an array of tables")
     names = {f"oidc:{provider['name']}" for provider in providers}
     for rule in rules:
-        if not isinstance(rule, dict) or set(rule) - {"provider", "subject", "group", "tenant", "scopes"}:
+        if not isinstance(rule, dict) or set(rule) - {
+            "provider",
+            "subject",
+            "group",
+            "tenant",
+            "scopes",
+        }:
             raise AuthFileError("authorization rule has unexpected fields")
         if not isinstance(rule.get("provider"), str) or rule["provider"] not in names:
-            raise AuthFileError("authorization provider must match a configured oidc:<name>")
+            raise AuthFileError(
+                "authorization provider must match a configured oidc:<name>"
+            )
         for field in ("subject", "group", "tenant"):
-            if field in rule and (not isinstance(rule[field], str) or not rule[field].strip()):
+            if field in rule and (
+                not isinstance(rule[field], str) or not rule[field].strip()
+            ):
                 raise AuthFileError("authorization selectors must be nonempty strings")
         scopes = rule.get("scopes")
         if (
@@ -321,14 +391,24 @@ def _validated_authorization(value: Any, providers: list[dict[str, Any]]) -> dic
             or not scopes
             or any(scope not in FULL_ACCESS_SCOPES for scope in scopes)
         ):
-            raise AuthFileError("authorization scopes must be supported DuckFlight scopes")
+            raise AuthFileError(
+                "authorization scopes must be supported DuckFlight scopes"
+            )
     return {"rules": rules}
 
 
 def validate_config(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise AuthFileError("configuration must contain a TOML document")
-    unexpected = set(data) - {"users", "tokens", "tls", "oidc", "authorization", "flight", "shutdown_grace_secs"}
+    unexpected = set(data) - {
+        "users",
+        "tokens",
+        "tls",
+        "oidc",
+        "authorization",
+        "flight",
+        "shutdown_grace_secs",
+    }
     if unexpected:
         raise AuthFileError(
             f"unexpected top-level field(s): {', '.join(sorted(unexpected))}"
@@ -351,15 +431,22 @@ def validate_config(data: Any) -> dict[str, Any]:
         raise AuthFileError("token SHA-256 digests must be unique")
     result: dict[str, Any] = {"users": users, "tokens": tokens}
     if "shutdown_grace_secs" in data:
-        result["shutdown_grace_secs"] = _runtime_integer("shutdown_grace_secs", data["shutdown_grace_secs"])
+        result["shutdown_grace_secs"] = _runtime_integer(
+            "shutdown_grace_secs", data["shutdown_grace_secs"]
+        )
     if "flight" in data:
         flight = data["flight"]
         if not isinstance(flight, dict) or set(flight) - {
-            "max_sessions", "session_timeout_ms", "transaction_timeout_ms", "query_timeout_ms",
+            "max_sessions",
+            "session_timeout_ms",
+            "transaction_timeout_ms",
+            "query_timeout_ms",
         }:
             raise AuthFileError("flight contains unsupported runtime options")
         result["flight"] = {
-            name: _runtime_integer(f"flight.{name}", value, minimum=1 if name == "max_sessions" else 0)
+            name: _runtime_integer(
+                f"flight.{name}", value, minimum=1 if name == "max_sessions" else 0
+            )
             for name, value in flight.items()
         }
     if "tls" in data:
@@ -375,7 +462,9 @@ def validate_config(data: Any) -> dict[str, Any]:
 
 def _runtime_integer(name: str, value: Any, minimum: int = 0) -> int:
     if type(value) is not int or not minimum <= value <= (1 << 63) - 1:
-        raise AuthFileError(f"{name} must be an integer from {minimum} to {(1 << 63) - 1}")
+        raise AuthFileError(
+            f"{name} must be an integer from {minimum} to {(1 << 63) - 1}"
+        )
     return value
 
 
@@ -712,7 +801,9 @@ def _check_config(args: argparse.Namespace) -> int:
         f"tls={'yes' if 'tls' in config else 'no'}"
     )
     if config.get("oidc"):
-        print("OIDC key cryptography and provider availability are verified by the runtime.")
+        print(
+            "OIDC key cryptography and provider availability are verified by the runtime."
+        )
     return 0
 
 
