@@ -558,14 +558,39 @@ Flight clients send the provider's access token in `authorization: Bearer <token
 each RPC. PgWire clients supporting SASL OAUTHBEARER can use the same providers.
 OIDC does not remove the TLS requirement outside loopback. Existing users, static Flight
 tokens, and mTLS identity mappings can coexist with OIDC. Process authentication environment
-variables are not merged into this file. The helper validates and preserves these tables
-when changing users or static tokens; it does not acquire provider tokens.
+variables are not merged into this file. The helper checks key structure and usable signing-key
+selection and preserves these tables when changing users or static tokens. Cryptographic key
+validation and provider availability remain runtime checks; the helper does not acquire tokens.
 
 The Flight listener serves standard `grpc.health.v1.Health` Check and Watch RPCs for
 both the empty service name and `arrow.flight.protocol.FlightService`. These probes
 require no bearer token, use the listener's TLS/client-certificate transport policy,
 and expose only readiness. They become serving after listener initialization and
 not-serving when stopping. Unknown service names return the standard health response.
+
+#### Flight session limits and listener shutdown
+
+These settings require the same new core payload described above. Put the shutdown option
+before any TOML table header. Explicit values override the core's corresponding environment
+defaults; omitted options retain those defaults.
+
+```toml
+shutdown_grace_secs = 30
+
+[flight]
+max_sessions = 10000
+session_timeout_ms = 0
+transaction_timeout_ms = 0
+query_timeout_ms = 0
+```
+
+`max_sessions` must be positive. Session and transaction timeouts are idle limits;
+`query_timeout_ms` is the execution deadline. Zero disables each timeout. A session can
+override its query deadline through the Flight `query_timeout` option or SQL
+`set query_timeout = '5s'`; `reset query_timeout` restores the server default.
+Shutdown rejects new work while allowing admitted queries and result fetches to finish
+within the grace period, then interrupts outstanding execution. Zero grace forces immediate
+shutdown. Stopping one listener leaves other listeners running.
 
 #### Optional mTLS
 

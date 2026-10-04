@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import getpass
 import hashlib
 import hmac
@@ -189,6 +191,54 @@ def _validated_tls(value: Any) -> dict[str, Any]:
     return result
 
 
+def _validate_static_jwks(jwks: Any, algorithms: list[str]) -> None:
+    """Check key shape and the runtime's signing-key selection, not cryptography."""
+    if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list) or not jwks["keys"]:
+        raise AuthFileError("oidc.jwks requires a nonempty keys array")
+    usable_ids: set[str] = set()
+    for key in jwks["keys"]:
+        if not isinstance(key, dict) or not isinstance(key.get("kty"), str):
+            raise AuthFileError("oidc.jwks keys must be objects with a string kty")
+        for field in ("kid", "use", "alg", "crv", "x5u"):
+            if field in key and not isinstance(key[field], str):
+                raise AuthFileError(f"oidc.jwks key {field} must be a string")
+        if "key_ops" in key and (
+            not isinstance(key["key_ops"], list)
+            or any(not isinstance(operation, str) for operation in key["key_ops"])
+        ):
+            raise AuthFileError("oidc.jwks key_ops must be an array of strings")
+        for field in ("n", "e", "x", "y", "d", "p", "q", "dp", "dq", "qi", "k", "x5t", "x5t#S256"):
+            if field not in key:
+                continue
+            value = key[field]
+            if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+                raise AuthFileError(f"oidc.jwks key {field} must be unpadded base64url")
+            try:
+                base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+            except (ValueError, binascii.Error) as error:
+                raise AuthFileError(f"oidc.jwks key {field} must be unpadded base64url") from error
+        kid = key.get("kid")
+        if not kid or key.get("use", "sig") != "sig":
+            continue
+        if "key_ops" in key and "verify" not in key["key_ops"]:
+            continue
+        algorithm = None
+        if key["kty"] == "RSA":
+            algorithm = "RS256"
+        elif key["kty"] == "EC" and key.get("crv") == "P-256":
+            algorithm = "ES256"
+        if algorithm not in algorithms or key.get("alg", algorithm) != algorithm:
+            continue
+        fields = ("n", "e") if algorithm == "RS256" else ("x", "y")
+        if any(not key.get(field) for field in fields):
+            raise AuthFileError("oidc.jwks signing key is missing public key material")
+        if kid in usable_ids:
+            raise AuthFileError(f"oidc.jwks has duplicate signing kid {kid}")
+        usable_ids.add(kid)
+    if not usable_ids:
+        raise AuthFileError("oidc.jwks contains no usable signing keys")
+
+
 def _validated_oidc(providers: Any) -> list[dict[str, Any]]:
     if not isinstance(providers, list):
         raise AuthFileError("oidc must be an array of tables")
@@ -240,12 +290,8 @@ def _validated_oidc(providers: Any) -> list[dict[str, Any]]:
             raise AuthFileError("oidc requires audience or audiences")
         if set(provider.get("algorithms", ["RS256"])) - {"RS256", "ES256"}:
             raise AuthFileError("oidc algorithms must be RS256 or ES256")
-        if "jwks" in provider and (
-            not isinstance(provider["jwks"], dict)
-            or not isinstance(provider["jwks"].get("keys"), list)
-            or not provider["jwks"]["keys"]
-        ):
-            raise AuthFileError("oidc.jwks requires a nonempty keys array")
+        if "jwks" in provider:
+            _validate_static_jwks(provider["jwks"], provider.get("algorithms", ["RS256"]))
         if "required_claims" in provider and (
             not isinstance(provider["required_claims"], dict)
             or any(not key.strip() for key in provider["required_claims"])
@@ -282,7 +328,7 @@ def _validated_authorization(value: Any, providers: list[dict[str, Any]]) -> dic
 def validate_config(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise AuthFileError("configuration must contain a TOML document")
-    unexpected = set(data) - {"users", "tokens", "tls", "oidc", "authorization"}
+    unexpected = set(data) - {"users", "tokens", "tls", "oidc", "authorization", "flight", "shutdown_grace_secs"}
     if unexpected:
         raise AuthFileError(
             f"unexpected top-level field(s): {', '.join(sorted(unexpected))}"
@@ -304,6 +350,18 @@ def validate_config(data: Any) -> dict[str, Any]:
     if len({token["sha256"] for token in tokens.values()}) != len(tokens):
         raise AuthFileError("token SHA-256 digests must be unique")
     result: dict[str, Any] = {"users": users, "tokens": tokens}
+    if "shutdown_grace_secs" in data:
+        result["shutdown_grace_secs"] = _runtime_integer("shutdown_grace_secs", data["shutdown_grace_secs"])
+    if "flight" in data:
+        flight = data["flight"]
+        if not isinstance(flight, dict) or set(flight) - {
+            "max_sessions", "session_timeout_ms", "transaction_timeout_ms", "query_timeout_ms",
+        }:
+            raise AuthFileError("flight contains unsupported runtime options")
+        result["flight"] = {
+            name: _runtime_integer(f"flight.{name}", value, minimum=1 if name == "max_sessions" else 0)
+            for name, value in flight.items()
+        }
     if "tls" in data:
         result["tls"] = _validated_tls(data["tls"])
     if "oidc" in data:
@@ -313,6 +371,12 @@ def validate_config(data: Any) -> dict[str, Any]:
             data["authorization"], result.get("oidc", [])
         )
     return result
+
+
+def _runtime_integer(name: str, value: Any, minimum: int = 0) -> int:
+    if type(value) is not int or not minimum <= value <= (1 << 63) - 1:
+        raise AuthFileError(f"{name} must be an integer from {minimum} to {(1 << 63) - 1}")
+    return value
 
 
 def validate_users(data: Any) -> dict[str, dict[str, Any]]:
@@ -370,6 +434,11 @@ def render_config(config: dict[str, Any]) -> str:
         "# Generated by scripts/duckflight_auth.py.",
         "# Contains password verifiers and authentication policy; keep mode 0600.",
     ]
+    if "shutdown_grace_secs" in config:
+        lines.extend(["", f"shutdown_grace_secs = {config['shutdown_grace_secs']}"])
+    if "flight" in config:
+        lines.extend(["", "[flight]"])
+        lines.extend(f"{name} = {value}" for name, value in config["flight"].items())
     for username in sorted(config["users"]):
         user = config["users"][username]
         salt = ", ".join(str(byte) for byte in user["salt"])
@@ -638,10 +707,12 @@ def _check_config(args: argparse.Namespace) -> int:
     if "tls" in config:
         _check_tls(path, config)
     print(
-        f"{path}: valid; users={len(config['users'])}; "
+        f"{path}: structurally valid; users={len(config['users'])}; "
         f"tokens={len(config['tokens'])}; oidc={len(config.get('oidc', []))}; "
         f"tls={'yes' if 'tls' in config else 'no'}"
     )
+    if config.get("oidc"):
+        print("OIDC key cryptography and provider availability are verified by the runtime.")
     return 0
 
 

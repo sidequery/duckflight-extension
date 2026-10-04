@@ -25,6 +25,13 @@ in the extension, adds DuckDB's extension metadata, and leaves the final artifac
 `build/release/duckflight.duckdb_extension`. Generated archives and extension binaries are ignored
 and must never be committed.
 
+The private checkout must provide `scripts/prepare-extension-core-headers.sh`. Both the
+core asset builder and this bundled builder use that helper to verify the official DuckDB
+v1.5.6 headers required by the native host session bridge. The core repository owns the
+archive and header checksums. Headers are cached under the core target directory;
+`DUCKFLIGHT_DUCKDB_INCLUDE_DIR` can select an existing header directory, which is verified
+before compilation. The build stops if the helper is missing or verification fails.
+
 By default, the configured platform must match the host. For a different architecture on the
 same operating system, set either `DUCKDB_PLATFORM` or `DUCKFLIGHT_CORE_TARGET`; the script resolves
 the other value and uses that target for both core and extension compilation and DuckDB metadata.

@@ -35,6 +35,16 @@ class BundledTargetTests(unittest.TestCase):
         manifest = self.core / "crates/duckflight-core-ffi/Cargo.toml"
         manifest.parent.mkdir(parents=True)
         manifest.write_text("# compiler substitute fixture\n")
+        self.headers_helper = self.core / "scripts/prepare-extension-core-headers.sh"
+        self.headers_helper.parent.mkdir()
+        self.headers_helper.write_text(
+            '#!/bin/bash\nset -eu\n'
+            'printf "%s\\n" "$1" > "$HEADERS_LOG"\n'
+            'headers="${DUCKFLIGHT_DUCKDB_INCLUDE_DIR:-$1/verified-headers}"\n'
+            'mkdir -p "$headers"\n'
+            'printf "verified fixture" > "$headers/duckdb.hpp"\n'
+            'cd "$headers" && pwd -P\n'
+        )
         self.tools = self.root / "bin"
         self.tools.mkdir()
         self.tool(
@@ -55,6 +65,8 @@ suffix = "dylib" if target.endswith("apple-darwin") else "so"
 with open(os.environ["BUILD_LOG"], "a") as log:
     log.write(target + "\\n")
 if "--manifest-path" in args:
+    headers = pathlib.Path(os.environ["DUCKFLIGHT_DUCKDB_INCLUDE_DIR"])
+    assert (headers / "duckdb.hpp").read_text() == "verified fixture"
     output = pathlib.Path(args[args.index("--target-dir") + 1]) / target / "release" / ("libduckflight_core_ffi." + suffix)
     data = ("core:" + target).encode()
 else:
@@ -77,6 +89,7 @@ output.write_bytes(data)
             PYTHON_BIN=sys.executable,
             OPENSSL_DIR=str(self.root),
             BUILD_LOG=str(self.root / "build.log"),
+            HEADERS_LOG=str(self.root / "headers.log"),
             CARGO_BUILD_TARGET="aarch64-apple-darwin",
             TEST_HOST_OS="Darwin",
             TEST_HOST_ARCH="arm64",
@@ -112,6 +125,13 @@ output.write_bytes(data)
         # FIELD2 is followed by the 32-byte FIELD1 and 256-byte signature.
         self.assertEqual(artifact[-320:-288].rstrip(b"\0").decode(), platform)
         self.assertEqual(self.platform_file.read_text().strip(), platform)
+        self.assertEqual(
+            (self.root / "headers.log").read_text().strip(),
+            overrides.get(
+                "DUCKFLIGHT_CORE_TARGET_DIR",
+                str(self.core / "target/duckflight-extension-bundle"),
+            ),
+        )
 
     def test_native(self) -> None:
         self.assert_build("osx_arm64", "aarch64-apple-darwin")
@@ -140,6 +160,26 @@ output.write_bytes(data)
         self.env.update(TEST_HOST_OS="Linux", TEST_HOST_ARCH="x86_64")
         self.platform_file.write_text("linux_amd64")
         self.assert_build("linux_amd64", "x86_64-unknown-linux-gnu")
+
+    def test_explicit_header_directory(self) -> None:
+        self.assert_build(
+            "osx_arm64", "aarch64-apple-darwin",
+            DUCKFLIGHT_DUCKDB_INCLUDE_DIR=str(self.root / "header override"),
+        )
+
+    def test_missing_header_helper_stops_before_compiling(self) -> None:
+        self.headers_helper.unlink()
+        result = self.run_build()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("missing DuckFlight core header preparation helper", result.stderr)
+        self.assertFalse((self.root / "build.log").exists())
+
+    def test_failed_header_verification_stops_before_compiling(self) -> None:
+        self.headers_helper.write_text('echo "header checksum mismatch" >&2\nexit 1\n')
+        result = self.run_build()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("header checksum mismatch", result.stderr)
+        self.assertFalse((self.root / "build.log").exists())
 
     def test_linux_cross_architecture(self) -> None:
         self.env.update(TEST_HOST_OS="Linux", TEST_HOST_ARCH="x86_64")
