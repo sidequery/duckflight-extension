@@ -93,6 +93,9 @@ CONFIG_RESETS = (
     "reset allowed_directories",
 )
 
+# Flight maps invalid-argument SQL failures to ArrowInvalid, outside FlightError.
+FLIGHT_SQL_ERRORS = (flight.FlightError, pa.ArrowInvalid)
+
 
 def denied(execute, sql: str, error_type, message: str) -> None:
     try:
@@ -374,14 +377,14 @@ def run(image: str, startup_timeout: float) -> None:
                     denied(
                         lambda sql: flight_query(client, options, sql),
                         sql,
-                        flight.FlightError,
+                        FLIGHT_SQL_ERRORS,
                         "permission",
                     )
                 for sql in CONFIG_BYPASSES + CONFIG_RESETS:
                     denied(
                         lambda sql: flight_execute(client, options, sql),
                         sql,
-                        flight.FlightError,
+                        FLIGHT_SQL_ERRORS,
                         "configuration",
                     )
                 read_options = flight.FlightCallOptions(
@@ -392,7 +395,7 @@ def run(image: str, startup_timeout: float) -> None:
                     denied(
                         lambda sql: flight_query(client, read_options, sql),
                         sql,
-                        flight.FlightError,
+                        FLIGHT_SQL_ERRORS,
                         "permission",
                     )
                 assert flight_query(
@@ -431,7 +434,7 @@ def run(image: str, startup_timeout: float) -> None:
                 denied(
                     lambda sql: flight_query(client, options, sql),
                     SECRET_QUERIES[1],
-                    flight.FlightError,
+                    FLIGHT_SQL_ERRORS,
                     "permission",
                 )
             stop(container)
