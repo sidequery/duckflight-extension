@@ -85,16 +85,17 @@ artifacts are not signed by DuckDB, so start the CLI with unsigned extensions en
 duckdb -unsigned
 ```
 
-Then load the downloaded file by its absolute path:
+Verify the download against `SHA256SUMS`, rename it to `duckflight.duckdb_extension`,
+then load it by its absolute path:
 
 ```sql
-load '/absolute/path/to/duckflight-v1.5.5-osx_arm64.duckdb_extension';
+load '/absolute/path/to/duckflight.duckdb_extension';
 select * from duckflight_core_status();
 ```
 
 Choose the asset matching `linux_amd64`, `linux_arm64`, `osx_amd64`, or `osx_arm64`.
-The DuckDB version must also match the asset name; the example above uses the existing 1.5.5
-release artifacts. The Docker image below builds this checkout for DuckDB 1.5.6.
+The DuckDB version must also match the asset name. Current release artifacts and the
+Docker image below target DuckDB 1.5.6.
 The `-unsigned` flag weakens DuckDB's extension-signature protection for that process, so use it only
 with an artifact downloaded from this repository's releases and verify its checksum when moving it
 through another system.
@@ -688,7 +689,7 @@ An authorized release build embeds the private core directly into the extension:
 
 See [docs/BUNDLED_CORE.md](docs/BUNDLED_CORE.md) for the local build and per-platform GitHub Release
 asset model. The platform payloads are published in the
-[`core-v0.1.8` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.8)
+[`core-v0.1.9` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.9)
 and checksum-pinned in `core-assets.lock`.
 
 <details>
