@@ -26,13 +26,13 @@ from adbc_driver_flightsql import dbapi
 from adbc_driver_manager import AdbcStatement
 
 ROOT = Path(__file__).resolve().parent
-RELEASE = "v0.1.11"
+RELEASE = "v0.1.12"
 DUCKDB_VERSION = "1.5.6"
 CHECKSUMS = {
-    "linux_amd64": "8383657c5d4f420a557a5ab5eb01f8f584c8651eefb08fa0d1758969c59f5b3b",
-    "linux_arm64": "c1c33c84faad2c0c13f2092a67a05d5eb685d3a195ddb66dc6912eb368aa97f0",
-    "osx_amd64": "25e87a79daa92dfb4ac9be9c8f367dfd32d4499e167c7a142a079e1c14121f7d",
-    "osx_arm64": "a94a8c20fb056c51745e46bac3735312cc00809685372232eb483196839fe694",
+    "linux_amd64": "c274636b29671a5453c12d169003da8dc21c0b01f64f62074406acdfdc9f3eaf",
+    "linux_arm64": "8bfe1c78195498fe36166e0b434d0639cd02d19fd02455228ff8481a18947ea7",
+    "osx_amd64": "696f332d663d2b6c8338cb4b5218b145912a8aec29889cd41dda0c915c88a4bb",
+    "osx_arm64": "5a6b7b11dc2a862e8b213a5ce3c9627997b399495b7ec7fa973a88b8f7678bef",
 }
 EXPECTED_ROWS = 99_997_497
 CLI_ASSETS = {
