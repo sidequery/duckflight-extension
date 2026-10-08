@@ -1,6 +1,6 @@
 # DuckFlight Flight SQL ClickBench entry
 
-A submission harness for DuckFlight **v0.1.10**, DuckDB **1.5.6**, ADBC Flight SQL
+A submission harness for DuckFlight **v0.1.11**, DuckDB **1.5.6**, ADBC Flight SQL
 **1.12.0**, and PyArrow **25.0.1**. Python dependencies are locked in `uv.lock`;
 release extension checksums are pinned in `harness.py`. The extension contains the
 proprietary DuckFlight core, so `template.json` marks this system proprietary even
