@@ -689,7 +689,7 @@ An authorized release build embeds the private core directly into the extension:
 
 See [docs/BUNDLED_CORE.md](docs/BUNDLED_CORE.md) for the local build and per-platform GitHub Release
 asset model. The platform payloads are published in the
-[`core-v0.1.11` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.11)
+[`core-v0.1.12` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.12)
 and checksum-pinned in `core-assets.lock`.
 
 <details>

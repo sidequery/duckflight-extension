@@ -9,6 +9,8 @@ import importlib.util
 import json
 import os
 import shutil
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -124,6 +126,25 @@ class ClickBenchTests(unittest.TestCase):
 
         with ThreadPoolExecutor(max_workers=10) as workers:
             list(workers.map(run, range(10)))
+
+    def test_abrupt_http2_disconnects_preserve_native_host(self):
+        server = json.loads((self.state / "server.json").read_text())
+        host, port = server["address"].rsplit(":", 1)
+        # The native CLI retains the default SIGPIPE disposition. A server
+        # write after a peer closes must fail that connection, not kill DuckDB.
+        preface = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+        settings = b"\x00\x00\x00\x04\x00\x00\x00\x00\x00"
+        for attempt in range(100):
+            with socket.create_connection((host, int(port)), timeout=5) as peer:
+                peer.sendall(preface + settings)
+                if attempt % 2:
+                    peer.setsockopt(
+                        socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+                    )
+            if attempt % 10 == 0:
+                harness.check(self.state)
+        harness.check(self.state)
+        self.assertEqual(json.loads((self.state / "server.json").read_text()), server)
 
     def test_restart_replaces_host_and_preserves_data(self):
         before = json.loads((self.state / "process.json").read_text())
