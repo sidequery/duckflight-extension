@@ -45,3 +45,9 @@ jobs:
           uv run --with ruff ruff check test/test_build_bundled.py
           uv run --with ruff ruff format --check test/test_build_bundled.py
           uv run test/test_build_bundled.py
+      - name: ClickBench harness checks
+        run: |
+          uv run --with ruff ruff check benchmarks/clickbench test/test_clickbench*.py
+          uv run --with ruff ruff format --check benchmarks/clickbench test/test_clickbench*.py
+          uv run --project benchmarks/clickbench --frozen test/test_clickbench_baseline.py
+          uv run --project benchmarks/clickbench --frozen test/test_clickbench_results.py

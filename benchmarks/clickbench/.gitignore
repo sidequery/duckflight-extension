@@ -1,0 +1,8 @@
+.venv/
+.tools/
+.state/
+hits.parquet
+result.csv
+results/
+baseline.json
+host-metadata.txt
