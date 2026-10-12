@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "duckflight.name" . }}
+  labels:
+    {{- include "duckflight.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "duckflight.selectorLabels" . | nindent 4 }}
+  ports:
+    {{- if .Values.postgres.enabled }}
+    - name: postgres
+      port: {{ .Values.postgres.port }}
+      targetPort: postgres
+      protocol: TCP
+    {{- end }}
+    {{- if .Values.flight.enabled }}
+    - name: flight
+      port: {{ .Values.flight.port }}
+      targetPort: flight
+      protocol: TCP
+    {{- end }}

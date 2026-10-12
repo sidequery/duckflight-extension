@@ -7,6 +7,7 @@ no data to export or copy.
 
 - [Install and load](#install-and-load)
 - [Docker](#docker)
+- [Kubernetes](#kubernetes)
 - [SQL API](#sql-api)
 - [Authentication setup](#authentication-setup)
 - [Observability](#observability)
@@ -214,6 +215,13 @@ To run the same real-client container checks locally:
 ```sh
 uv run test/docker_smoke.py duckflight:local
 ```
+
+## Kubernetes
+
+For Iceberg or DuckLake, use the [DuckFlight Helm chart](charts/duckflight/README.md).
+It deploys independent workers with in-memory DuckDB, external lake catalogs,
+TLS/authentication and bootstrap Secrets, and ephemeral disk for spill. The chart
+uses a Deployment with two replicas by default and creates no persistent volumes.
 
 ## SQL API
 

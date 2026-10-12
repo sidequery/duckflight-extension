@@ -1,0 +1,144 @@
+{{- if not (or .Values.postgres.enabled .Values.flight.enabled) }}
+{{- fail "enable at least one of postgres.enabled or flight.enabled" }}
+{{- end }}
+{{- if and .Values.postgres.enabled .Values.flight.enabled (eq (int .Values.postgres.port) (int .Values.flight.port)) }}
+{{- fail "postgres.port and flight.port must differ when both listeners are enabled" }}
+{{- end }}
+{{- $auth := required "auth.existingSecret is required (TOML and TLS identity)" .Values.auth.existingSecret }}
+{{- $bootstrap := required "bootstrap.existingSecret is required (lake startup SQL)" .Values.bootstrap.existingSecret }}
+{{- $probePort := ternary "flight" "postgres" .Values.flight.enabled }}
+{{- range .Values.extraEnv }}
+{{- if has .name (list "DUCKFLIGHT_DATABASE" "DUCKFLIGHT_CONFIG" "DUCKFLIGHT_INIT_SQL" "DUCKFLIGHT_PG_ADDRESS" "DUCKFLIGHT_FLIGHT_ADDRESS" "DUCKFLIGHT_MEMORY_LIMIT" "DUCKFLIGHT_THREADS" "DUCKFLIGHT_TEMP_DIRECTORY" "HOME") }}
+{{- fail (printf "extraEnv must not override chart-managed variable %s" .name) }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "duckflight.name" . }}
+  labels:
+    {{- include "duckflight.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "duckflight.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "duckflight.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "duckflight.serviceAccount" . }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: duckflight
+          image: {{ include "duckflight.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: DUCKFLIGHT_DATABASE
+              value: ":memory:"
+            - name: DUCKFLIGHT_CONFIG
+              value: /run/secrets/duckflight.toml
+            - name: DUCKFLIGHT_INIT_SQL
+              value: /run/bootstrap/init.sql
+            - name: DUCKFLIGHT_PG_ADDRESS
+              value: {{ ternary (printf "0.0.0.0:%v" .Values.postgres.port) "" .Values.postgres.enabled | quote }}
+            - name: DUCKFLIGHT_FLIGHT_ADDRESS
+              value: {{ ternary (printf "0.0.0.0:%v" .Values.flight.port) "" .Values.flight.enabled | quote }}
+            - name: DUCKFLIGHT_MEMORY_LIMIT
+              value: {{ .Values.duckdb.memoryLimit | quote }}
+            - name: DUCKFLIGHT_THREADS
+              value: {{ .Values.duckdb.threads | quote }}
+            - name: DUCKFLIGHT_TEMP_DIRECTORY
+              value: /data/spill
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            {{- if .Values.postgres.enabled }}
+            - name: postgres
+              containerPort: {{ .Values.postgres.port }}
+            {{- end }}
+            {{- if .Values.flight.enabled }}
+            - name: flight
+              containerPort: {{ .Values.flight.port }}
+            {{- end }}
+          # Flight starts last when both protocols are enabled. Kubernetes' native
+          # gRPC probe cannot negotiate this listener's required TLS transport.
+          startupProbe:
+            tcpSocket:
+              port: {{ $probePort }}
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ $probePort }}
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            - name: auth
+              mountPath: /run/secrets
+              readOnly: true
+            - name: bootstrap
+              mountPath: /run/bootstrap
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: {{ .Values.spill.sizeLimit }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: auth
+          secret:
+            secretName: {{ $auth }}
+            defaultMode: 0440
+        - name: bootstrap
+          secret:
+            secretName: {{ $bootstrap }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.bootstrap.key }}
+                path: init.sql
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

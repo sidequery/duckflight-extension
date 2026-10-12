@@ -1,0 +1,7 @@
+*
+!test/
+!test/docker_smoke.py
+!test/kubernetes/
+!test/kubernetes/pyproject.toml
+!test/kubernetes/uv.lock
+!test/kubernetes/client.py
