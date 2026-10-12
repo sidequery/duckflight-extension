@@ -175,7 +175,7 @@ class IdleSuite(Suite):
 
     def run(self) -> None:
         self.setup()
-        self.job("idle", service_account="idle-client")
+        self.job("idle", service_account="idle-client", timeout_seconds=600)
 
 
 def main() -> None:

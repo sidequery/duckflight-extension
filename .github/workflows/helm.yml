@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        catalog: [iceberg, ducklake]
+        catalog: [iceberg, ducklake, idle]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -64,9 +64,16 @@ jobs:
           docker build --tag duckflight:e2e .
           docker build --file test/kubernetes/Dockerfile --tag duckflight-e2e-client:local .
       - name: Helm install and real lake queries on k3s
+        if: matrix.catalog != 'idle'
         run: >-
           uv run --no-project test/kubernetes/run.py
           --catalog ${{ matrix.catalog }} --image duckflight:e2e
+          --artifacts "$RUNNER_TEMP/e2e-artifacts"
+      - name: PostgreSQL and Flight idle sleep and wake on k3s
+        if: matrix.catalog == 'idle'
+        run: >-
+          uv run --no-project test/kubernetes/run_idle.py
+          --image duckflight:e2e --client-image duckflight-e2e-client:local
           --artifacts "$RUNNER_TEMP/e2e-artifacts"
       - name: Upload failure diagnostics
         if: failure()

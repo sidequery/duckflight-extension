@@ -56,9 +56,11 @@ or provider-specific catalog authorization.
 
 ## Idle mode
 
-With a locally built image containing the proxy and companion idle-capable core:
+CI runs the idle suite alongside the lake catalog suites. To run it locally with
+the image built from this checkout:
 
 ```sh
+docker build --tag duckflight:idle-e2e .
 docker build --file test/kubernetes/Dockerfile --tag duckflight-idle-e2e-client:local .
 uv run --no-project test/kubernetes/run_idle.py --image duckflight:idle-e2e
 ```
@@ -73,3 +75,9 @@ keep running throughout and must not prevent sleep. The chart default remains
 3000 seconds. API timeout/restart fencing and unsupported-core refusal are also
 covered by the proxy's Rust tests; detached state and orphan engine work have
 core tests. The idle suite does not need an external catalog fixture.
+
+For local testing of an unreleased core, put the built Linux payload at
+`/libduckflight_core_ffi.so` in a scratch test image and pass
+`--build-arg DUCKFLIGHT_CORE_TEST_IMAGE=<local-image>` and
+`--build-arg DUCKFLIGHT_CORE_TEST_SHA256=<digest>` to the server build. The build
+verifies the digest. Production builds use `core-assets.lock`.

@@ -257,7 +257,11 @@ class Suite:
         )
 
     def job(
-        self, mode: str, pod_ip: str = "", service_account: str = "default"
+        self,
+        mode: str,
+        pod_ip: str = "",
+        service_account: str = "default",
+        timeout_seconds: int = 240,
     ) -> None:
         name = f"{mode}-{secrets.token_hex(3)}"
         self.apply(
@@ -267,7 +271,7 @@ class Suite:
                 "metadata": {"name": name},
                 "spec": {
                     "backoffLimit": 0,
-                    "activeDeadlineSeconds": 240,
+                    "activeDeadlineSeconds": timeout_seconds,
                     "template": {
                         "spec": {
                             "serviceAccountName": service_account,
@@ -315,7 +319,7 @@ class Suite:
                 },
             }
         )
-        deadline = time.monotonic() + 270
+        deadline = time.monotonic() + timeout_seconds + 30
         while time.monotonic() < deadline:
             job = json.loads(self.kubectl("get", "job", name, "-o", "json"))
             status = job.get("status", {})

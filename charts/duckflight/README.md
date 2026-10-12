@@ -169,19 +169,10 @@ and waits for bootstrap/readiness, then the proxy forwards the original bytes.
 Allow for cold startup in client connection/RPC deadlines; the proxy's default
 wait limit is 600 seconds. Connections without protocol data do not wake a worker.
 
-This requires an image containing **both** `/usr/local/bin/duckflight-idle-proxy`
-and the core's idle-control protocol v1. `core-v0.1.12` does not implement that
-protocol. Old images fail the opt-in worker readiness check; missing/invalid
-activity evidence never authorizes scale-down. The companion runtime change is
-maintained in the private core repository; release and pin that payload before
-publishing an idle-capable production image. Normal mode continues to use the
-existing pinned payload. For local testing only, put the built Linux payload at
-`/libduckflight_core_ffi.so` in a scratch test image and supply that image as
-`--build-arg DUCKFLIGHT_CORE_TEST_IMAGE=<local-image>`. Supply its SHA-256 as
-`--build-arg DUCKFLIGHT_CORE_TEST_SHA256=<digest>`; the build verifies it and
-invalidates the layer cache when the image/digest changes. This embeds a local
-companion payload without changing `core-assets.lock`. Production builds must use
-the immutable release lock instead of this local test override.
+Use an image built from this chart's matching source revision. It must include
+the wake-up proxy and idle-control protocol v1, available in core v0.1.13 onward.
+Older images fail the opt-in worker readiness check; missing or invalid activity
+evidence never authorizes scale-down.
 
 Create an existing Secret with a private `token` (at least 32 alphanumeric
 characters) and `ca.crt` containing the worker's issuing CA or trusted self-signed

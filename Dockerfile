@@ -44,9 +44,9 @@ RUN set -eu; platform="$(cat configure/platform.txt)"; \
     unzip /tmp/duckdb.zip -d /build/cli \
     && strip --strip-unneeded /build/cli/duckdb
 RUN curl --fail --location --retry 3 \
-        https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.10/DUCKFLIGHT_CORE_BINARY_LICENSE.txt \
+        https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.13/DUCKFLIGHT_CORE_BINARY_LICENSE.txt \
         -o /build/DUCKFLIGHT_CORE_BINARY_LICENSE.txt \
-    && echo 'facf1a4cbd9343500854cc5e617f502f4c3da24f76b3fcf7dfdbbd80d021cca4  /build/DUCKFLIGHT_CORE_BINARY_LICENSE.txt' | sha256sum --check -
+    && echo '006fb1abf934cb4acf0db7ef911befb299df0faf69e8a8e363d3b1619e4e545e  /build/DUCKFLIGHT_CORE_BINARY_LICENSE.txt' | sha256sum --check -
 RUN curl --fail --location --retry 3 https://raw.githubusercontent.com/duckdb/duckdb/v1.5.6/LICENSE \
         -o /build/DUCKDB_LICENSE.txt \
     && echo '7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb  /build/DUCKDB_LICENSE.txt' | sha256sum --check -
