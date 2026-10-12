@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iceberg
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      fixture: iceberg
+  template:
+    metadata:
+      labels:
+        fixture: iceberg
+    spec:
+      containers:
+        - name: iceberg
+          image: apache/iceberg-rest-fixture:1.10.1@sha256:f7d679d30ac9c640bdeb2c015dff533cd3c8f1c7d491ebcb5d436f9a42db1d6f
+          env:
+            - name: CATALOG_WAREHOUSE
+              value: s3://warehouse/iceberg/
+            - name: CATALOG_IO__IMPL
+              value: org.apache.iceberg.aws.s3.S3FileIO
+            - name: CATALOG_S3_ENDPOINT
+              value: http://object-store:8333
+            - name: CATALOG_S3_PATH__STYLE__ACCESS
+              value: "true"
+            - name: AWS_REGION
+              value: us-east-1
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: test-credentials
+                  key: S3_ACCESS_KEY
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: test-credentials
+                  key: S3_SECRET_KEY
+          ports:
+            - containerPort: 8181
+          readinessProbe:
+            httpGet:
+              path: /v1/config
+              port: 8181
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iceberg
+spec:
+  selector:
+    fixture: iceberg
+  ports:
+    - port: 8181
+      targetPort: 8181

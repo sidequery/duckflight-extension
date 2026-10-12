@@ -1,0 +1,78 @@
+name: Helm chart
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: helm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Check Helm availability
+        run: helm version --short
+      - name: Lint and render contracts
+        run: |
+          helm lint charts/duckflight --strict --set image.tag=e2e --set auth.existingSecret=auth --set bootstrap.existingSecret=bootstrap
+          uv run --with ruff ruff check test/test_helm_chart.py
+          uv run --with ruff ruff format --check test/test_helm_chart.py
+          uv run test/test_helm_chart.py
+          uv run --with ruff ruff check test/kubernetes/*.py
+          uv run --with ruff ruff format --check test/kubernetes/*.py
+
+  e2e:
+    name: k3s / ${{ matrix.catalog }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        catalog: [iceberg, ducklake]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Install checksum-verified k3d
+        env:
+          K3D_VERSION: v5.9.0
+        run: |
+          directory="$RUNNER_TEMP/k3d"
+          mkdir -p "$directory"
+          curl --fail --location --retry 3 "https://github.com/k3d-io/k3d/releases/download/$K3D_VERSION/k3d-linux-amd64" -o "$directory/k3d-linux-amd64"
+          curl --fail --location --retry 3 "https://github.com/k3d-io/k3d/releases/download/$K3D_VERSION/checksums.txt" -o "$directory/checksums.txt"
+          cd "$directory"
+          awk '$2 == "_dist/k3d-linux-amd64" {print $1 "  k3d-linux-amd64"}' checksums.txt > selected-checksum.txt
+          test -s selected-checksum.txt
+          sha256sum --check selected-checksum.txt
+          chmod +x k3d-linux-amd64
+          ln -s k3d-linux-amd64 k3d
+          echo "$directory" >> "$GITHUB_PATH"
+      - name: Build checkout's server and locked E2E client
+        run: |
+          docker build --tag duckflight:e2e .
+          docker build --file test/kubernetes/Dockerfile --tag duckflight-e2e-client:local .
+      - name: Helm install and real lake queries on k3s
+        run: >-
+          uv run --no-project test/kubernetes/run.py
+          --catalog ${{ matrix.catalog }} --image duckflight:e2e
+          --artifacts "$RUNNER_TEMP/e2e-artifacts"
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: k3s-${{ matrix.catalog }}-diagnostics
+          path: ${{ runner.temp }}/e2e-artifacts
+          if-no-files-found: ignore
+          retention-days: 7

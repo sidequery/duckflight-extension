@@ -1,0 +1,12 @@
+[project]
+name = "duckflight-kubernetes-e2e"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "adbc-driver-flightsql>=1.8,<2",
+  "boto3>=1.40,<2",
+  "duckdb==1.5.6",
+  "psycopg[binary]>=3.2,<4",
+  "pyarrow>=18,<24",
+  "pyiceberg[pyarrow]>=0.10,<0.11",
+]

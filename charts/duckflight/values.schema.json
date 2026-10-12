@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "replicaCount": {"type": "integer", "minimum": 1},
+    "postgres": {"$ref": "#/definitions/protocol"},
+    "flight": {"$ref": "#/definitions/protocol"},
+    "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1},
+    "automountServiceAccountToken": {"type": "boolean"},
+    "duckdb": {
+      "type": "object",
+      "properties": {
+        "memoryLimit": {"type": "string", "minLength": 1},
+        "threads": {"type": "integer", "minimum": 1}
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": {"enum": ["ClusterIP", "LoadBalancer", "NodePort"]}
+      }
+    }
+  },
+  "definitions": {
+    "protocol": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "port": {"type": "integer", "minimum": 1024, "maximum": 65535}
+      }
+    }
+  }
+}

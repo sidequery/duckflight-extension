@@ -43,6 +43,7 @@ RUN curl --fail --location --retry 3 https://raw.githubusercontent.com/duckdb/du
 COPY docker/server.c docker/server.c
 COPY LICENSE LICENSE
 
+# Startup-loaded Iceberg needs librt, which is not a dependency of the CLI/core.
 RUN mkdir -p /runtime/usr/local/bin /runtime/opt/duckflight /runtime/etc/ssl/certs \
         /runtime/data /runtime/tmp \
     && cc -Os -s -Wall -Wextra -Werror docker/server.c -o /runtime/usr/local/bin/duckflight-server \
@@ -55,6 +56,7 @@ RUN mkdir -p /runtime/usr/local/bin /runtime/opt/duckflight /runtime/etc/ssl/cer
     && { ldd /build/cli/duckdb; ldd /build/duckflight.duckdb_extension; ldd /runtime/usr/local/bin/duckflight-server; } \
         | awk '/=> \// {print $3} /^\t\// {print $1}' | sort -u \
         | xargs -I '{}' cp --parents -L '{}' /runtime \
+    && cp --parents -L /lib/"$(cc -dumpmachine)"/librt.so.1 /runtime \
     && printf 'duckflight:x:10001:10001::/data:/sbin/nologin\n' > /runtime/etc/passwd \
     && printf 'duckflight:x:10001:\n' > /runtime/etc/group \
     && chown 10001:10001 /runtime/data \

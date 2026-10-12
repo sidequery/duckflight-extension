@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: object-store
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      fixture: object-store
+  template:
+    metadata:
+      labels:
+        fixture: object-store
+    spec:
+      containers:
+        - name: object-store
+          image: chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+          args:
+            - server
+            - -s3
+            - -dir=/data
+            - -volume.max=10
+            - -master.volumeSizeLimitMB=128
+            - -s3.config=/run/auth/s3.json
+          ports:
+            - containerPort: 8333
+          readinessProbe:
+            tcpSocket:
+              port: 8333
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: auth
+              mountPath: /run/auth
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: auth
+          secret:
+            secretName: storage-auth
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: object-store
+spec:
+  selector:
+    fixture: object-store
+  ports:
+    - port: 8333
+      targetPort: 8333

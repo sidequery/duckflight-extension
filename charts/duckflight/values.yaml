@@ -1,0 +1,69 @@
+# Each pod is an independent query engine; no shared DuckDB files or PVCs.
+replicaCount: 2
+image:
+  repository: ghcr.io/sidequery/duckflight-extension
+  # Set a tested commit tag or digest that includes Iceberg's librt dependency.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Existing Secret containing duckflight.toml and its relative TLS files.
+# Credentials must not be stored in Helm values or a ConfigMap.
+auth:
+  existingSecret: ""
+
+# Existing Secret with init.sql: load lake extensions, create temporary secrets,
+# attach external catalogs, and allowlist the required object-storage prefixes.
+bootstrap:
+  existingSecret: ""
+  key: init.sql
+
+service:
+  type: ClusterIP
+  annotations: {}
+postgres:
+  enabled: true
+  port: 5433
+flight:
+  enabled: true
+  port: 31337
+
+duckdb:
+  memoryLimit: 3GB
+  threads: 2
+spill:
+  sizeLimit: 10Gi
+resources:
+  requests:
+    cpu: "1"
+    memory: 4Gi
+    ephemeral-storage: 2Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+    ephemeral-storage: 12Gi
+
+# Allow for both listeners to drain and the CLI to close.
+terminationGracePeriodSeconds: 90
+startupProbe:
+  periodSeconds: 5
+  failureThreshold: 120
+readinessProbe:
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+# Enable when a cloud workload identity requires projected credentials.
+automountServiceAccountToken: false
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# Telemetry, workload identity environment variables, etc. No inline credentials.
+extraEnv: []
