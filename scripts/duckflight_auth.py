@@ -20,11 +20,10 @@ import secrets
 import ssl
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
-
-import tomllib
 
 DEFAULT_ITERATIONS = 10_000
 MINIMUM_ITERATIONS = 4_096
