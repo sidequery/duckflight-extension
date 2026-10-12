@@ -2,6 +2,19 @@
 {{- printf "%s-duckflight" .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "duckflight.proxyName" -}}
+{{- printf "%s-idle-proxy" (include "duckflight.name" . | trunc 52 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "duckflight.workerService" -}}
+{{- printf "%s-workers" (include "duckflight.name" . | trunc 55 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "duckflight.proxySelectorLabels" -}}
+app.kubernetes.io/name: duckflight-idle-proxy
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+
 {{- define "duckflight.selectorLabels" -}}
 app.kubernetes.io/name: duckflight
 app.kubernetes.io/instance: {{ .Release.Name }}

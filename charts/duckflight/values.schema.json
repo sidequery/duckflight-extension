@@ -2,6 +2,22 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "idleScale": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "idleTimeoutSeconds": {"type": "integer", "minimum": 1},
+        "coldStartTimeoutSeconds": {"type": "integer", "minimum": 1},
+        "controlPort": {"type": "integer", "minimum": 1024, "maximum": 65535},
+        "existingSecret": {"type": "string"},
+        "proxy": {
+          "type": "object",
+          "properties": {
+            "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1}
+          }
+        }
+      }
+    },
     "replicaCount": {"type": "integer", "minimum": 1},
     "postgres": {"$ref": "#/definitions/protocol"},
     "flight": {"$ref": "#/definitions/protocol"},

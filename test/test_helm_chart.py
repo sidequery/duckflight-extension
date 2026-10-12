@@ -110,8 +110,104 @@ class HelmChartTests(unittest.TestCase):
             "ghcr.io/sidequery/duckflight-extension@sha256:" + "a" * 64,
         )
 
+    def test_idle_mode_routes_both_protocols_through_one_controller(self):
+        result = render("idleScale.enabled=true", "idleScale.existingSecret=idle")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        objects = {
+            (obj["kind"], obj["metadata"]["name"]): obj
+            for obj in yaml.safe_load_all(result.stdout)
+        }
+        worker = objects["Deployment", "lake-duckflight"]
+        proxy = objects["Deployment", "lake-duckflight-idle-proxy"]
+        self.assertEqual(worker["spec"]["replicas"], 0)
+        self.assertEqual(proxy["spec"]["replicas"], 1)
+        self.assertEqual(proxy["spec"]["strategy"], {"type": "Recreate"})
+        pod = proxy["spec"]["template"]["spec"]
+        container = pod["containers"][0]
+        environment = {item["name"]: item.get("value") for item in container["env"]}
+        self.assertEqual(environment["DUCKFLIGHT_PROXY_IDLE_TIMEOUT_SECONDS"], "3000")
+        self.assertEqual(environment["DUCKFLIGHT_PROXY_POSTGRES_PORT"], "5433")
+        self.assertEqual(environment["DUCKFLIGHT_PROXY_FLIGHT_PORT"], "31337")
+        service = objects["Service", "lake-duckflight"]
+        backend = objects["Service", "lake-duckflight-workers"]
+        self.assertEqual(
+            service["spec"]["selector"],
+            proxy["spec"]["template"]["metadata"]["labels"],
+        )
+        self.assertEqual(
+            backend["spec"]["selector"], worker["spec"]["selector"]["matchLabels"]
+        )
+        role = objects["Role", "lake-duckflight-idle-proxy"]
+        self.assertEqual(role["rules"][0]["resourceNames"], ["lake-duckflight"])
+        self.assertEqual(role["rules"][0]["verbs"], ["get", "patch"])
+        self.assertEqual(role["rules"][1]["verbs"], ["list"])
+        self.assertTrue(pod["automountServiceAccountToken"])
+        worker_pod = worker["spec"]["template"]["spec"]
+        self.assertFalse(worker_pod["automountServiceAccountToken"])
+        worker_env = {
+            item["name"]: item["value"] for item in worker_pod["containers"][0]["env"]
+        }
+        self.assertEqual(worker_env["DUCKFLIGHT_IDLE_EXPECTED_LISTENERS"], "2")
+        policy = objects["NetworkPolicy", "lake-duckflight-workers"]["spec"]
+        self.assertEqual(
+            policy["podSelector"]["matchLabels"], backend["spec"]["selector"]
+        )
+        self.assertEqual(
+            policy["ingress"][0]["from"][0]["podSelector"]["matchLabels"],
+            service["spec"]["selector"],
+        )
+        self.assertEqual(
+            {port["port"] for port in policy["ingress"][0]["ports"]},
+            {5433, 31337, 4091},
+        )
+
+    def test_idle_mode_supports_either_protocol_independently(self):
+        for disabled, remaining in (("postgres", "flight"), ("flight", "postgres")):
+            with self.subTest(disabled=disabled):
+                result = render(
+                    "idleScale.enabled=true",
+                    "idleScale.existingSecret=idle",
+                    f"{disabled}.enabled=false",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                objects = list(yaml.safe_load_all(result.stdout))
+                proxy = next(
+                    obj
+                    for obj in objects
+                    if obj["kind"] == "Deployment"
+                    and obj["metadata"]["name"].endswith("idle-proxy")
+                )
+                environment = {
+                    item["name"]: item.get("value")
+                    for item in proxy["spec"]["template"]["spec"]["containers"][0][
+                        "env"
+                    ]
+                }
+                self.assertNotIn(
+                    f"DUCKFLIGHT_PROXY_{disabled.upper()}_PORT", environment
+                )
+                self.assertIn(f"DUCKFLIGHT_PROXY_{remaining.upper()}_PORT", environment)
+
     def test_invalid_runtime_configuration_fails_before_install(self):
         cases = (
+            (("idleScale.enabled=true",), "idleScale.existingSecret"),
+            (("idleScale.idleTimeoutSeconds=0",), "idleTimeoutSeconds"),
+            (
+                (
+                    "idleScale.enabled=true",
+                    "idleScale.existingSecret=idle",
+                    "idleScale.controlPort=5433",
+                ),
+                "must differ",
+            ),
+            (
+                (
+                    "idleScale.enabled=true",
+                    "idleScale.existingSecret=idle",
+                    "flight.port=4090",
+                ),
+                "health port",
+            ),
             (("postgres.enabled=false", "flight.enabled=false"), "at least one"),
             (("image.tag=",), "image.tag or image.digest"),
             (("replicaCount=-1",), "replicaCount"),
