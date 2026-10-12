@@ -260,7 +260,10 @@ async fn timed_out_sleep_is_fenced_before_worker_resume() {
     let fixture = Fixture::new().await;
     let mut controller = fixture.controller().await;
     controller.wake().await.unwrap();
-    controller.kube.client = Client::builder().timeout(Duration::from_secs(1)).build().unwrap();
+    controller.kube.client = Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()
+        .unwrap();
     fixture.slow_sleep.store(true, Ordering::SeqCst);
     Fixture::expire(&mut controller);
     assert!(controller.idle_tick().await.is_err());
