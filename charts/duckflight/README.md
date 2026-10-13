@@ -160,6 +160,72 @@ PostgreSQL's
 database qualifier follows the client's selected database; an unrelated startup
 database name such as `duckflight` is not an alias for qualified `lake.*` SQL.
 
+## Optional idle sleep and wake-up
+
+Set `idleScale.enabled=true` to run a small, always-on TCP proxy and zero or one
+query worker. PostgreSQL and Flight keep the same public Service, port numbers,
+TLS identity, and authentication. The first protocol request starts the worker
+and waits for bootstrap/readiness, then the proxy forwards the original bytes.
+Allow for cold startup in client connection/RPC deadlines; the proxy's default
+wait limit is 600 seconds. Connections without protocol data do not wake a worker.
+
+Use an image built from this chart's matching source revision. It must include
+the wake-up proxy and idle-control protocol v1, available in core v0.1.13 onward.
+Older images fail the opt-in worker readiness check; missing or invalid activity
+evidence never authorizes scale-down.
+
+Create an existing Secret with a private `token` (at least 32 alphanumeric
+characters) and `ca.crt` containing the worker's issuing CA or trusted self-signed
+certificate. Generate/store it through your secret manager. Both worker and
+proxy mount this Secret; the token must never be put in Helm values. The worker's
+existing TLS certificate must include the public Service's short DNS name
+(`lake-duckflight` in this example), which the proxy verifies when connecting to
+the pod's HTTPS control endpoint. Query TLS continues to pass through unchanged,
+including client certificates and PostgreSQL CancelRequest connections.
+
+```yaml
+idleScale:
+  enabled: true
+  existingSecret: duckflight-idle
+  idleTimeoutSeconds: 3000       # 50 minutes after the worker becomes idle
+  coldStartTimeoutSeconds: 600
+```
+
+The idle interval begins only after all protected activity is gone. Open TCP
+sessions, even idle sessions, keep the worker awake. Detached Flight password
+sessions, negotiated sessions, prepared statements, transactions, outstanding
+result tickets, active response streams, and unfinished engine/cleanup workers
+also prevent sleep. Close Flight sessions explicitly with `CloseSession`; closing
+only a gRPC channel does not release server-owned sessions. Existing session and
+transaction expiration settings are unchanged. Abandoned state with expiration
+disabled can therefore keep a worker awake indefinitely. This is intentional:
+the idle timeout never force-closes a session or interrupts a query.
+
+Readiness/startup probes use authenticated HTTPS control checks in this mode;
+they do not create query sessions or reset the idle clock. Immediately before
+scaling to zero, the core atomically fences both listeners and checks the
+remaining activity. The proxy serializes sleep/wake and fences Kubernetes writes
+using the Deployment's resource version, including recovery after timeouts or
+proxy restarts. A new connection arriving during sleep waits for a fresh worker.
+The proxy is a single replica with `Recreate` updates; do not attach an HPA or
+another replica controller to either Deployment in this mode.
+
+`replicaCount` applies to normal mode; idle mode always owns zero or one worker.
+The chart preserves that desired count on Helm upgrades. Enabling it on an
+existing release with live normal-mode workers is rejected: install a fresh
+release or deliberately drain and scale the old deployment to zero first.
+Explicit rollouts, pod deletion,
+node failures, and Kubernetes termination-grace limits remain separate lifecycle
+events; the idle controller's safety guarantee applies to its automatic sleep.
+
+The chart installs a dedicated proxy ServiceAccount and a namespace Role limited
+to reading/patching its worker Deployment and listing pods. The worker does not
+receive Kubernetes API credentials. A NetworkPolicy restricts both worker
+protocols and control traffic to the proxy pods; use a CNI that enforces it, and
+route clients through the public Service. The private worker Service is not a
+client endpoint. Worker memory/CPU requests disappear at sleep, but underlying VM
+costs decrease only if your cluster also removes unused nodes.
+
 ## Validate
 
 ```sh

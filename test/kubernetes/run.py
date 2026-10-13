@@ -22,6 +22,7 @@ K3S_IMAGE = "rancher/k3s:v1.33.6-k3s1@sha256:d7119ab9e0054692a86a8eda454f2d3370d
 class Suite:
     def __init__(self, arguments, directory: Path):
         self.arguments = arguments
+        self.client_image = getattr(arguments, "client_image", CLIENT_IMAGE)
         self.directory = directory
         self.cluster = arguments.cluster or f"duckflight-e2e-{secrets.token_hex(4)}"
         self.namespace = f"lake-e2e-{secrets.token_hex(4)}"
@@ -121,7 +122,7 @@ class Suite:
             "image",
             "import",
             self.arguments.image,
-            CLIENT_IMAGE,
+            self.client_image,
             "--cluster",
             self.cluster,
         )
@@ -255,7 +256,13 @@ class Suite:
             "5m",
         )
 
-    def job(self, mode: str, pod_ip: str = "") -> None:
+    def job(
+        self,
+        mode: str,
+        pod_ip: str = "",
+        service_account: str = "default",
+        timeout_seconds: int = 240,
+    ) -> None:
         name = f"{mode}-{secrets.token_hex(3)}"
         self.apply(
             {
@@ -264,14 +271,15 @@ class Suite:
                 "metadata": {"name": name},
                 "spec": {
                     "backoffLimit": 0,
-                    "activeDeadlineSeconds": 240,
+                    "activeDeadlineSeconds": timeout_seconds,
                     "template": {
                         "spec": {
+                            "serviceAccountName": service_account,
                             "restartPolicy": "Never",
                             "containers": [
                                 {
                                     "name": "client",
-                                    "image": CLIENT_IMAGE,
+                                    "image": self.client_image,
                                     "imagePullPolicy": "Never",
                                     "args": [mode],
                                     "envFrom": [
@@ -311,7 +319,7 @@ class Suite:
                 },
             }
         )
-        deadline = time.monotonic() + 270
+        deadline = time.monotonic() + timeout_seconds + 30
         while time.monotonic() < deadline:
             job = json.loads(self.kubectl("get", "job", name, "-o", "json"))
             status = job.get("status", {})

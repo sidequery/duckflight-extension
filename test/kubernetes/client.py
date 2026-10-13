@@ -226,9 +226,15 @@ def verify(updated: bool) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["seed", "append", "verify", "verify-updated"])
+    parser.add_argument(
+        "mode", choices=["seed", "append", "verify", "verify-updated", "idle"]
+    )
     mode = parser.parse_args().mode
-    if mode in ("seed", "append"):
+    if mode == "idle":
+        from idle_client import main as idle_cycle
+
+        idle_cycle()
+    elif mode in ("seed", "append"):
         seed(mode == "append")
     else:
         verify(mode == "verify-updated")

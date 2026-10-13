@@ -49,6 +49,7 @@ jobs:
           uv run test/release/host_sessions.py /tmp/duckflight.duckdb_extension
           uv run test/release/oidc_health.py /tmp/duckflight.duckdb_extension
           uv run test/release/observability.py /tmp/duckflight.duckdb_extension
+          uv run test/release/client_regressions.py /tmp/duckflight.duckdb_extension --native-sigpipe
       - name: Push tested architecture
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:

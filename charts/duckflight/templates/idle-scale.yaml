@@ -1,0 +1,190 @@
+{{- if .Values.idleScale.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "duckflight.proxyName" . }}
+  labels:
+    {{- include "duckflight.proxySelectorLabels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "duckflight.proxyName" . }}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [{{ include "duckflight.name" . | quote }}]
+    verbs: [get, patch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "duckflight.proxyName" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "duckflight.proxyName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "duckflight.proxyName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "duckflight.proxyName" . }}
+spec:
+  replicas: 1
+  # A single controller owns sleep/wake decisions. Resource-version fences also
+  # prevent a delayed old-controller scale request from racing a new wake-up.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "duckflight.proxySelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "duckflight.proxySelectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "duckflight.proxyName" . }}
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: {{ .Values.idleScale.proxy.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: proxy
+          image: {{ include "duckflight.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [/usr/local/bin/duckflight-idle-proxy]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DUCKFLIGHT_PROXY_DEPLOYMENT
+              value: {{ include "duckflight.name" . | quote }}
+            - name: DUCKFLIGHT_PROXY_SELECTOR
+              value: {{ printf "app.kubernetes.io/name=duckflight,app.kubernetes.io/instance=%s" .Release.Name | quote }}
+            - name: DUCKFLIGHT_PROXY_HOSTNAME
+              value: {{ include "duckflight.name" . | quote }}
+            - name: DUCKFLIGHT_PROXY_CONTROL_PORT
+              value: {{ .Values.idleScale.controlPort | quote }}
+            - name: DUCKFLIGHT_PROXY_IDLE_TIMEOUT_SECONDS
+              value: {{ .Values.idleScale.idleTimeoutSeconds | quote }}
+            - name: DUCKFLIGHT_PROXY_COLD_START_TIMEOUT_SECONDS
+              value: {{ .Values.idleScale.coldStartTimeoutSeconds | quote }}
+            - name: DUCKFLIGHT_PROXY_TOKEN_FILE
+              value: /run/idle-secret/token
+            - name: DUCKFLIGHT_PROXY_CA_FILE
+              value: /run/idle-secret/ca.crt
+            {{- if .Values.postgres.enabled }}
+            - name: DUCKFLIGHT_PROXY_POSTGRES_PORT
+              value: {{ .Values.postgres.port | quote }}
+            {{- end }}
+            {{- if .Values.flight.enabled }}
+            - name: DUCKFLIGHT_PROXY_FLIGHT_PORT
+              value: {{ .Values.flight.port | quote }}
+            {{- end }}
+          ports:
+            - name: health
+              containerPort: 4090
+            {{- if .Values.postgres.enabled }}
+            - name: postgres
+              containerPort: {{ .Values.postgres.port }}
+            {{- end }}
+            {{- if .Values.flight.enabled }}
+            - name: flight
+              containerPort: {{ .Values.flight.port }}
+            {{- end }}
+          startupProbe:
+            httpGet: {path: /healthz, port: health}
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /healthz, port: health}
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.idleScale.proxy.resources | nindent 12 }}
+          volumeMounts:
+            - name: idle-secret
+              mountPath: /run/idle-secret
+              readOnly: true
+      volumes:
+        - name: idle-secret
+          secret:
+            secretName: {{ .Values.idleScale.existingSecret }}
+            defaultMode: 0440
+            items:
+              - key: token
+                path: token
+              - key: ca.crt
+                path: ca.crt
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "duckflight.workerService" . }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "duckflight.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: idle-control
+      port: {{ .Values.idleScale.controlPort }}
+      targetPort: idle-control
+    {{- if .Values.postgres.enabled }}
+    - name: postgres
+      port: {{ .Values.postgres.port }}
+      targetPort: postgres
+    {{- end }}
+    {{- if .Values.flight.enabled }}
+    - name: flight
+      port: {{ .Values.flight.port }}
+      targetPort: flight
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "duckflight.workerService" . }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "duckflight.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "duckflight.proxySelectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.idleScale.controlPort }}
+        {{- if .Values.postgres.enabled }}
+        - protocol: TCP
+          port: {{ .Values.postgres.port }}
+        {{- end }}
+        {{- if .Values.flight.enabled }}
+        - protocol: TCP
+          port: {{ .Values.flight.port }}
+        {{- end }}
+{{- end }}

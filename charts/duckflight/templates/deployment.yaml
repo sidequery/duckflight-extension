@@ -7,8 +7,17 @@
 {{- $auth := required "auth.existingSecret is required (TOML and TLS identity)" .Values.auth.existingSecret }}
 {{- $bootstrap := required "bootstrap.existingSecret is required (lake startup SQL)" .Values.bootstrap.existingSecret }}
 {{- $probePort := ternary "flight" "postgres" .Values.flight.enabled }}
+{{- if .Values.idleScale.enabled }}
+{{- $_ := required "idleScale.existingSecret is required (token and worker CA)" .Values.idleScale.existingSecret }}
+{{- if or (eq (int .Values.idleScale.controlPort) 4090) (and .Values.postgres.enabled (eq (int .Values.idleScale.controlPort) (int .Values.postgres.port))) (and .Values.flight.enabled (eq (int .Values.idleScale.controlPort) (int .Values.flight.port))) }}
+{{- fail "idleScale.controlPort must differ from enabled listeners and proxy health port 4090" }}
+{{- end }}
+{{- if or (and .Values.postgres.enabled (eq (int .Values.postgres.port) 4090)) (and .Values.flight.enabled (eq (int .Values.flight.port) 4090)) }}
+{{- fail "idleScale listeners must differ from proxy health port 4090" }}
+{{- end }}
+{{- end }}
 {{- range .Values.extraEnv }}
-{{- if has .name (list "DUCKFLIGHT_DATABASE" "DUCKFLIGHT_CONFIG" "DUCKFLIGHT_INIT_SQL" "DUCKFLIGHT_PG_ADDRESS" "DUCKFLIGHT_FLIGHT_ADDRESS" "DUCKFLIGHT_MEMORY_LIMIT" "DUCKFLIGHT_THREADS" "DUCKFLIGHT_TEMP_DIRECTORY" "HOME") }}
+{{- if has .name (list "DUCKFLIGHT_DATABASE" "DUCKFLIGHT_CONFIG" "DUCKFLIGHT_INIT_SQL" "DUCKFLIGHT_PG_ADDRESS" "DUCKFLIGHT_FLIGHT_ADDRESS" "DUCKFLIGHT_MEMORY_LIMIT" "DUCKFLIGHT_THREADS" "DUCKFLIGHT_TEMP_DIRECTORY" "DUCKFLIGHT_IDLE_CONTROL_ADDRESS" "DUCKFLIGHT_IDLE_TOKEN_FILE" "DUCKFLIGHT_IDLE_EXPECTED_LISTENERS" "DUCKFLIGHT_IDLE_SERVER_NAME" "HOME") }}
 {{- fail (printf "extraEnv must not override chart-managed variable %s" .name) }}
 {{- end }}
 {{- end }}
@@ -16,10 +25,27 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "duckflight.name" . }}
+  {{- if .Values.idleScale.enabled }}
+  annotations:
+    duckflight.sidequery.dev/idle-scale: "true"
+  {{- end }}
   labels:
     {{- include "duckflight.labels" . | nindent 4 }}
 spec:
+  {{- if .Values.idleScale.enabled }}
+  {{- $existing := lookup "apps/v1" "Deployment" .Release.Namespace (include "duckflight.name" .) }}
+  {{- if and $existing (gt (int $existing.spec.replicas) 0) (ne (dig "annotations" "duckflight.sidequery.dev/idle-scale" "false" $existing.metadata) "true") }}
+  {{- fail "enabling idleScale on live normal-mode workers requires draining them first; use a fresh release" }}
+  {{- end }}
+  {{- if and $existing (gt (int $existing.spec.replicas) 1) }}
+  {{- fail "enabling idleScale on multiple live workers requires draining them first; use a fresh release" }}
+  {{- end }}
+  # Preserve the controller's desired count across Helm upgrades; cold installs
+  # have zero workers. This mode deliberately owns exactly one awake worker.
+  replicas: {{ if $existing }}{{ $existing.spec.replicas }}{{ else }}0{{ end }}
+  {{- else }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -77,10 +103,24 @@ spec:
               value: {{ .Values.duckdb.threads | quote }}
             - name: DUCKFLIGHT_TEMP_DIRECTORY
               value: /data/spill
+            {{- if .Values.idleScale.enabled }}
+            - name: DUCKFLIGHT_IDLE_CONTROL_ADDRESS
+              value: {{ printf "0.0.0.0:%v" .Values.idleScale.controlPort | quote }}
+            - name: DUCKFLIGHT_IDLE_TOKEN_FILE
+              value: /run/idle-secret/token
+            - name: DUCKFLIGHT_IDLE_EXPECTED_LISTENERS
+              value: {{ add (ternary 1 0 .Values.postgres.enabled) (ternary 1 0 .Values.flight.enabled) | quote }}
+            - name: DUCKFLIGHT_IDLE_SERVER_NAME
+              value: {{ include "duckflight.name" . | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           ports:
+            {{- if .Values.idleScale.enabled }}
+            - name: idle-control
+              containerPort: {{ .Values.idleScale.controlPort }}
+            {{- end }}
             {{- if .Values.postgres.enabled }}
             - name: postgres
               containerPort: {{ .Values.postgres.port }}
@@ -92,16 +132,31 @@ spec:
           # Flight starts last when both protocols are enabled. Kubernetes' native
           # gRPC probe cannot negotiate this listener's required TLS transport.
           startupProbe:
+            {{- if .Values.idleScale.enabled }}
+            exec:
+              command: [/usr/local/bin/duckflight-idle-proxy, worker-ready]
+            {{- else }}
             tcpSocket:
               port: {{ $probePort }}
+            {{- end }}
             {{- toYaml .Values.startupProbe | nindent 12 }}
           readinessProbe:
+            {{- if .Values.idleScale.enabled }}
+            exec:
+              command: [/usr/local/bin/duckflight-idle-proxy, worker-ready]
+            {{- else }}
             tcpSocket:
               port: {{ $probePort }}
+            {{- end }}
             {{- toYaml .Values.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            {{- if .Values.idleScale.enabled }}
+            - name: idle-secret
+              mountPath: /run/idle-secret
+              readOnly: true
+            {{- end }}
             - name: data
               mountPath: /data
             - name: tmp
@@ -113,6 +168,17 @@ spec:
               mountPath: /run/bootstrap
               readOnly: true
       volumes:
+        {{- if .Values.idleScale.enabled }}
+        - name: idle-secret
+          secret:
+            secretName: {{ .Values.idleScale.existingSecret }}
+            defaultMode: 0440
+            items:
+              - key: token
+                path: token
+              - key: ca.crt
+                path: ca.crt
+        {{- end }}
         - name: data
           emptyDir:
             sizeLimit: {{ .Values.spill.sizeLimit }}

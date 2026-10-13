@@ -1,4 +1,6 @@
 # syntax=docker/dockerfile:1
+ARG DUCKFLIGHT_CORE_TEST_IMAGE=scratch
+FROM ${DUCKFLIGHT_CORE_TEST_IMAGE} AS test_core
 FROM ghcr.io/astral-sh/uv:0.8.22@sha256:9874eb7afe5ca16c363fe80b294fe700e460df29a55532bbfea234a0f12eddb1 AS uv
 FROM rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f AS build
 COPY --from=uv /uv /usr/local/bin/uv
@@ -16,9 +18,14 @@ RUN uv venv --python python3 configure/venv \
     && uv pip install --python configure/venv/bin/python duckdb==1.5.6 packaging \
     && configure/venv/bin/python extension-ci-tools/scripts/configure_helper.py --duckdb-platform \
     && configure/venv/bin/python -c "import tomllib; from pathlib import Path; Path('configure/extension_version.txt').write_text(tomllib.loads(Path('Cargo.toml').read_text())['package']['version'])"
+ARG DUCKFLIGHT_CORE_TEST_SHA256
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    DUCKFLIGHT_CORE_BUNDLE_PATH="$(./scripts/fetch-core-release.sh)" \
+    --mount=type=bind,from=test_core,target=/test-core \
+    DUCKFLIGHT_CORE_BUNDLE_PATH="$(if test -f /test-core/libduckflight_core_ffi.so; then \
+      test -n "$DUCKFLIGHT_CORE_TEST_SHA256" && \
+      printf '%s  /test-core/libduckflight_core_ffi.so\n' "$DUCKFLIGHT_CORE_TEST_SHA256" | sha256sum --check --status && \
+      printf '%s' /test-core/libduckflight_core_ffi.so; else ./scripts/fetch-core-release.sh; fi)" \
     DUCKDB_EXTENSION_NAME=duckflight DUCKDB_EXTENSION_MIN_DUCKDB_VERSION=v1.5.6 \
     cargo build --locked --release \
     && strip --strip-unneeded target/release/libduckflight.so \
@@ -26,6 +33,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         -l target/release/libduckflight.so -o /build/duckflight.duckdb_extension \
         -n duckflight -dv v1.5.6 -evf configure/extension_version.txt \
         -pf configure/platform.txt --abi-type C_STRUCT_UNSTABLE
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --locked --release -p duckflight-idle-proxy
 RUN set -eu; platform="$(cat configure/platform.txt)"; \
     record="$(awk -v platform="$platform" '$1 == platform {print $2, $3}' docker/cli-assets.lock)"; \
     test -n "$record"; set -- $record; \
@@ -34,9 +44,9 @@ RUN set -eu; platform="$(cat configure/platform.txt)"; \
     unzip /tmp/duckdb.zip -d /build/cli \
     && strip --strip-unneeded /build/cli/duckdb
 RUN curl --fail --location --retry 3 \
-        https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.10/DUCKFLIGHT_CORE_BINARY_LICENSE.txt \
+        https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.13/DUCKFLIGHT_CORE_BINARY_LICENSE.txt \
         -o /build/DUCKFLIGHT_CORE_BINARY_LICENSE.txt \
-    && echo 'facf1a4cbd9343500854cc5e617f502f4c3da24f76b3fcf7dfdbbd80d021cca4  /build/DUCKFLIGHT_CORE_BINARY_LICENSE.txt' | sha256sum --check -
+    && echo '006fb1abf934cb4acf0db7ef911befb299df0faf69e8a8e363d3b1619e4e545e  /build/DUCKFLIGHT_CORE_BINARY_LICENSE.txt' | sha256sum --check -
 RUN curl --fail --location --retry 3 https://raw.githubusercontent.com/duckdb/duckdb/v1.5.6/LICENSE \
         -o /build/DUCKDB_LICENSE.txt \
     && echo '7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb  /build/DUCKDB_LICENSE.txt' | sha256sum --check -
@@ -48,12 +58,13 @@ RUN mkdir -p /runtime/usr/local/bin /runtime/opt/duckflight /runtime/etc/ssl/cer
         /runtime/data /runtime/tmp \
     && cc -Os -s -Wall -Wextra -Werror docker/server.c -o /runtime/usr/local/bin/duckflight-server \
     && cp /build/cli/duckdb /runtime/usr/local/bin/ \
+    && cp /build/target/release/duckflight-idle-proxy /runtime/usr/local/bin/ \
     && cp /build/duckflight.duckdb_extension LICENSE DUCKFLIGHT_CORE_BINARY_LICENSE.txt DUCKDB_LICENSE.txt /runtime/opt/duckflight/ \
     && cp /usr/share/doc/libc6/copyright /runtime/opt/duckflight/LIBC_COPYRIGHT \
     && cp /usr/share/doc/libstdc++6/copyright /runtime/opt/duckflight/LIBSTDCXX_COPYRIGHT \
     && cp /usr/share/doc/libgcc-s1/copyright /runtime/opt/duckflight/LIBGCC_COPYRIGHT \
     && cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/certs/ \
-    && { ldd /build/cli/duckdb; ldd /build/duckflight.duckdb_extension; ldd /runtime/usr/local/bin/duckflight-server; } \
+    && { ldd /build/cli/duckdb; ldd /build/duckflight.duckdb_extension; ldd /runtime/usr/local/bin/duckflight-server; ldd /runtime/usr/local/bin/duckflight-idle-proxy; } \
         | awk '/=> \// {print $3} /^\t\// {print $1}' | sort -u \
         | xargs -I '{}' cp --parents -L '{}' /runtime \
     && cp --parents -L /lib/"$(cc -dumpmachine)"/librt.so.1 /runtime \

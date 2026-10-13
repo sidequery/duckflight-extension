@@ -6,6 +6,7 @@ COPY test/kubernetes/pyproject.toml test/kubernetes/uv.lock ./
 RUN uv sync --frozen --no-dev
 COPY test/docker_smoke.py ./
 COPY test/kubernetes/client.py ./
+COPY test/kubernetes/idle_client.py ./
 ENV PATH="/e2e/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 ENTRYPOINT ["uv", "run", "--frozen", "--offline", "--no-dev", "/e2e/client.py"]

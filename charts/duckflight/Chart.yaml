@@ -2,6 +2,6 @@ apiVersion: v2
 name: duckflight
 description: Stateless DuckFlight query workers for external lake catalogs
 type: application
-version: 0.1.0
+version: 0.2.0
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/sidequery/duckflight-extension

@@ -11,7 +11,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [workspace]
-members = ["crates/duckflight-extension-abi", "test/mock_core"]
+members = ["crates/duckflight-extension-abi", "crates/duckflight-idle-proxy", "test/mock_core"]
 default-members = ["."]
 resolver = "2"
 

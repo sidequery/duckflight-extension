@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import os
 import secrets
+import signal
 import sys
 import tempfile
 import time
@@ -310,7 +311,8 @@ def check_flight_pool_recovery(address: str) -> None:
         # Each mode must exceed the bundled core's 16 connection slots.
         for explicit in (True, False):
             for _ in range(24):
-                info = execute("select i from range(1000000000) t(i)")
+                # Exceed transport buffers while staying within CI memory limits.
+                info = execute("select i from range(4000000) t(i)")
                 reader = client.do_get(info.endpoints[0].ticket, options)
                 if reader.read_chunk().data.num_rows == 0:
                     raise AssertionError("expected a running, nonempty query")
@@ -476,11 +478,23 @@ def main() -> None:
     )
     parser.add_argument("extension", type=Path, help="bundled .duckdb_extension path")
     parser.add_argument(
+        "--native-sigpipe",
+        action="store_true",
+        help="test disconnected Flight writers with a native host's default SIGPIPE policy",
+    )
+    parser.add_argument(
         "--require-noexec-tmp",
         action="store_true",
         help="require Linux temporary storage mounted noexec before exercising the bundle",
     )
     args = parser.parse_args()
+    if args.native_sigpipe:
+        if not hasattr(signal, "SIGPIPE"):
+            parser.error("--native-sigpipe requires a Unix host")
+        # Python normally ignores SIGPIPE, which masks crashes in native hosts.
+        # This standalone test process owns its signal policy; the core must not
+        # change it when clients abandon their Flight response streams.
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     if args.require_noexec_tmp:
         if sys.platform != "linux":
             parser.error("--require-noexec-tmp requires Linux")

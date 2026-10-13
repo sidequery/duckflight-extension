@@ -1,5 +1,22 @@
 # Each pod is an independent query engine; no shared DuckDB files or PVCs.
 replicaCount: 2
+# Optional single-worker sleep/wake mode. The public Service then targets a
+# small, always-on TCP proxy. Open connections and core-owned state block sleep.
+idleScale:
+  enabled: false
+  idleTimeoutSeconds: 3000
+  coldStartTimeoutSeconds: 600
+  controlPort: 4091
+  # Existing Secret: token (>=32 alphanumeric characters), ca.crt (worker CA).
+  existingSecret: ""
+  proxy:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+    terminationGracePeriodSeconds: 3600
 image:
   repository: ghcr.io/sidequery/duckflight-extension
   # Set a tested commit tag or digest that includes Iceberg's librt dependency.
