@@ -14,6 +14,9 @@ COPY test/mock_core test/mock_core
 COPY scripts/fetch-core-release.sh scripts/fetch-core-release.sh
 COPY extension-ci-tools/scripts extension-ci-tools/scripts
 COPY docker/cli-assets.lock docker/cli-assets.lock
+# The container remains on DuckDB 1.5.6; Community builds use the 2.0 core.
+COPY docker/core-assets.lock docker/core-assets.lock
+ENV DUCKFLIGHT_CORE_ASSET_MANIFEST=docker/core-assets.lock
 RUN uv venv --python python3 configure/venv \
     && uv pip install --python configure/venv/bin/python duckdb==1.5.6 packaging \
     && configure/venv/bin/python extension-ci-tools/scripts/configure_helper.py --duckdb-platform \

@@ -62,6 +62,31 @@ uv run test/release/client_regressions.py build/release/duckflight.duckdb_extens
 uv run test/release/observability.py build/release/duckflight.duckdb_extension
 ```
 
+For DuckDB 2.0, build the native core against the final source pin
+`d54cbbe3df17e8e5ce68312f483b4155836112aa`. The matching core accepts the initial
+`v2.0.0-alpha44357` label and the final `v2.0.0` label. `core-assets.lock` selects
+the 2.0 payloads from `core-v0.1.14`. The Docker image still runs DuckDB 1.5.6
+and selects its existing `core-v0.1.13` payloads from `docker/core-assets.lock`.
+Preserve the old Community ref
+under `repo.variegata` if an explicit 1.5.6 binary update is needed; `ref_next` no
+longer selects a build. The local `description.yml` is a submission template, so
+its `repo.ref` must be replaced with the resulting public extension commit.
+
+`make test_release` builds a checksum-verified CLI from the exact final pin and
+runs `test/release/duckflight.test` against it. To reuse an existing CLI build:
+
+```sh
+DUCKDB_TEST_CLI=/path/to/duckdb make test_release
+uv run test/release/host_sessions.py build/release/duckflight.duckdb_extension \
+  --duckdb-cli /path/to/duckdb
+uv run test/release/oidc_health.py build/release/duckflight.duckdb_extension \
+  --duckdb-cli /path/to/duckdb
+```
+
+The smoke runner checks the CLI's source ID. The session suite's CLI option also
+avoids depending on a Python wheel matching the release candidate. These commands
+test the bundled production runtime; `make test_debug` uses the open mock core.
+
 On Linux, run the same suite with `TMPDIR` on a `noexec` mount and pass
 `--require-noexec-tmp` to verify both the mount flags and bundled listener behavior.
 

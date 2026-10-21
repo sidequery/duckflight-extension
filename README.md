@@ -288,7 +288,7 @@ order by function_name;
 ```
 
 The Community Extensions page collects these comments automatically after loading the extension.
-The five native server-control functions are documented above because DuckDB 1.5.6 does not
+The five native server-control functions are documented above because the v1 C API does not
 expose description setters for C API table functions.
 
 | Area | Useful signatures | Purpose |
@@ -682,7 +682,10 @@ cargo test --workspace
 ```
 
 The distribution workflow uses DuckDB's reusable build, test, metadata, and packaging matrix for
-DuckDB v1.5.6. Generated shared libraries, build trees, and `.duckdb_extension` artifacts are ignored
+DuckDB 2.0 at final pin `d54cbbe3df`, initially labeled `v2.0.0-alpha44357`.
+The extension uses the stable v1 C API (`v1.5.6`); that metadata version identifies the API,
+while the bundled native core must match the DuckDB host release.
+Generated shared libraries, build trees, and `.duckdb_extension` artifacts are ignored
 and must not be committed.
 
 The initial Community release supports Linux and macOS on amd64 and arm64. Windows, WebAssembly,
