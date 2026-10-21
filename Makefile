@@ -38,7 +38,7 @@ debug: build_extension_library_debug build_extension_with_metadata_debug
 release:
 	@bundle_path="$${DUCKFLIGHT_CORE_BUNDLE_PATH:-}"; \
 	if [ -z "$${bundle_path}" ] && grep -Eq '^[^#[:space:]]' core-assets.lock; then \
-		bundle_path="$$(./scripts/fetch-core-release.sh)"; \
+		bundle_path="$$(./scripts/fetch-core-release.sh)" || exit $$?; \
 	fi; \
 	if [ -n "$${bundle_path}" ]; then \
 		DUCKFLIGHT_CORE_BUNDLE_PATH="$${bundle_path}" $(MAKE) release_internal; \
