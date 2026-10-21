@@ -20,6 +20,7 @@ from pathlib import Path
 import duckdb
 import grpc
 import jwt
+from cli_host import CLIHost
 from cryptography.hazmat.primitives.asymmetric import ec
 from google.protobuf.any_pb2 import Any as ProtobufAny
 from grpc_health.v1 import health_pb2, health_pb2_grpc
@@ -44,7 +45,7 @@ def query(client: flight.FlightClient, token: str) -> list[dict]:
     return client.do_get(info.endpoints[0].ticket, options).read_all().to_pylist()
 
 
-def run(extension: Path) -> None:
+def run(extension: Path, duckdb_cli: Path | None = None) -> None:
     # Standalone compatibility flags must never weaken an explicit extension config.
     os.environ["DUCKFLIGHT_FLIGHT_ALLOW_LEGACY_UNAUTHENTICATED"] = "1"
     key = ec.generate_private_key(ec.SECP256R1())
@@ -86,7 +87,11 @@ def run(extension: Path) -> None:
     try:
         with (
             tempfile.TemporaryDirectory() as directory,
-            duckdb.connect(config={"allow_unsigned_extensions": "true"}) as host,
+            (
+                CLIHost(duckdb_cli)
+                if duckdb_cli is not None
+                else duckdb.connect(config={"allow_unsigned_extensions": "true"})
+            ) as host,
         ):
             config = Path(directory) / "auth.toml"
             config.write_text(f'''[[oidc]]
@@ -172,4 +177,8 @@ scopes = ["query:execute"]
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("extension", type=Path)
-    run(parser.parse_args().extension)
+    parser.add_argument(
+        "--duckdb-cli", type=Path, help="test with this CLI instead of the Python wheel"
+    )
+    args = parser.parse_args()
+    run(args.extension, args.duckdb_cli)

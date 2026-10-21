@@ -17,6 +17,7 @@ from typing import Self
 import duckdb
 import psycopg
 import pyarrow as pa
+from cli_host import CLIHost
 from google.protobuf.any_pb2 import Any as ProtobufAny
 from pyarrow import flight
 
@@ -363,14 +364,20 @@ def check_independent_listener_lifetimes(
     print("PASS independent Flight/PgWire stop and restart", flush=True)
 
 
-def run(extension: Path) -> None:
+def run(extension: Path, duckdb_cli: Path | None = None) -> None:
     if not extension.is_file():
         raise FileNotFoundError(extension)
     address = None
     with tempfile.TemporaryDirectory(prefix="duckflight-host-sessions-") as directory:
         config = Path(directory) / "auth.toml"
         write_config(config)
-        with duckdb.connect(config={"allow_unsigned_extensions": "true"}) as host:
+        connection = (
+            CLIHost(duckdb_cli)
+            if duckdb_cli is not None
+            else duckdb.connect(config={"allow_unsigned_extensions": "true"})
+        )
+        with connection as host:
+            print("Host:", host.execute("pragma version").fetchall(), flush=True)
             try:
                 host.execute(
                     "create table host_session_values as select 1::bigint as value"
@@ -384,7 +391,7 @@ def run(extension: Path) -> None:
                 )
                 assert_equal(
                     host.execute(
-                        "select loaded, abi_version from duckflight_core_status()"
+                        "select loaded, abi_version::bigint from duckflight_core_status()"
                     ).fetchone(),
                     (True, 1),
                     "bundled ABI v1 core",
@@ -426,4 +433,8 @@ def run(extension: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("extension", type=Path, help="bundled .duckdb_extension path")
-    run(parser.parse_args().extension)
+    parser.add_argument(
+        "--duckdb-cli", type=Path, help="test with this CLI instead of the Python wheel"
+    )
+    args = parser.parse_args()
+    run(args.extension, args.duckdb_cli)

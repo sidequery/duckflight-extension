@@ -27,13 +27,11 @@ load duckflight;
 DuckDB downloads the build matching your DuckDB version and platform. DuckFlight currently supports
 Linux and macOS on amd64 and arm64.
 
-### DuckDB 2.0 alpha (Sidequery repository)
+### DuckDB 2.0 (Sidequery repository)
 
-Sidequery publishes signed alpha builds at
-`https://extensions.sidequery.dev`. DuckFlight `0.1.5-alpha` is available for
-**macOS Apple Silicon (`osx_arm64`)** on DuckDB `v2.0.0-alpha41489` and
-`v2.0.0-alpha41533`. Use **alpha41489** for the setup below. You can check your
-DuckDB version with `pragma version;`.
+Sidequery publishes signed DuckDB **2.0.0** builds for Linux and macOS on amd64 and
+arm64 at `https://extensions.sidequery.dev`. You can check your DuckDB version with
+`pragma version;`.
 
 In the matching DuckDB CLI, enable custom repositories and register Sidequery:
 
@@ -50,9 +48,8 @@ select * from duckflight_core_status();
 The core status reports `loaded = true` when ready. See
 [authentication setup](#authentication-setup) and the [SQL API](#sql-api) to start listeners.
 
-DuckDB automatically installs `httpfs` for HTTPS repository access. If its download
-returns 404 on a newer alpha, use alpha41489 or wait for that alpha's upstream
-extensions to be published.
+DuckDB automatically installs `httpfs` for HTTPS repository access. Keep unsigned
+extensions disabled; these builds use Sidequery's repository signing key.
 
 <details>
 <summary>Verify the repository signing key</summary>
@@ -288,7 +285,7 @@ order by function_name;
 ```
 
 The Community Extensions page collects these comments automatically after loading the extension.
-The five native server-control functions are documented above because DuckDB 1.5.6 does not
+The five native server-control functions are documented above because the v1 C API does not
 expose description setters for C API table functions.
 
 | Area | Useful signatures | Purpose |
@@ -682,7 +679,10 @@ cargo test --workspace
 ```
 
 The distribution workflow uses DuckDB's reusable build, test, metadata, and packaging matrix for
-DuckDB v1.5.6. Generated shared libraries, build trees, and `.duckdb_extension` artifacts are ignored
+DuckDB 2.0 at final pin `d54cbbe3df`, initially labeled `v2.0.0-alpha44357`.
+The extension uses the stable v1 C API (`v1.5.6`); that metadata version identifies the API,
+while the bundled native core must match the DuckDB host release.
+Generated shared libraries, build trees, and `.duckdb_extension` artifacts are ignored
 and must not be committed.
 
 The initial Community release supports Linux and macOS on amd64 and arm64. Windows, WebAssembly,
@@ -697,7 +697,7 @@ An authorized release build embeds the private core directly into the extension:
 
 See [docs/BUNDLED_CORE.md](docs/BUNDLED_CORE.md) for the local build and per-platform GitHub Release
 asset model. The platform payloads are published in the
-[`core-v0.1.12` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.12)
+[`core-v0.1.14` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.14)
 and checksum-pinned in `core-assets.lock`.
 
 <details>

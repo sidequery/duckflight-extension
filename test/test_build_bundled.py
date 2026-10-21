@@ -136,6 +136,29 @@ output.write_bytes(data)
     def test_native(self) -> None:
         self.assert_build("osx_arm64", "aarch64-apple-darwin")
 
+    def test_release_fetch_failure_stops_before_compiling(self) -> None:
+        (self.public / "core-assets.lock").write_text(
+            "osx_arm64 "
+            + "0" * 64
+            + " https://github.com/example/core/releases/download/test/core.dylib\n"
+        )
+        self.tool("curl", "#!/bin/sh\necho 'download failed' >&2\nexit 22\n")
+        self.tool(
+            "release-make",
+            '#!/bin/sh\nprintf "compiled\\n" > "$BUILD_LOG"\n',
+        )
+        result = subprocess.run(
+            ["make", "release", f"MAKE={self.tools / 'release-make'}"],
+            cwd=self.public,
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("download failed", result.stderr)
+        self.assertFalse((self.root / "build.log").exists())
+
     def test_platform_override(self) -> None:
         self.assert_build(
             "osx_amd64", "x86_64-apple-darwin", DUCKDB_PLATFORM="osx_amd64"

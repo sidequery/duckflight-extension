@@ -3,8 +3,11 @@
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 EXTENSION_NAME=duckflight
-USE_UNSTABLE_C_API=1
+# DuckDB 2.0 routes C_STRUCT_UNSTABLE to the v2 API. DuckFlight uses the
+# v1 API, whose previously unstable functions were stabilized in v1.5.6.
+USE_UNSTABLE_C_API=0
 TARGET_DUCKDB_VERSION=v1.5.6
+DUCKDB_TEST_VERSION?=main
 
 ifeq ($(OS),Windows_NT)
 MOCK_CORE_LIBRARY=target/debug/duckflight_mock_core.dll
@@ -26,7 +29,8 @@ include extension-ci-tools/makefiles/c_api_extensions/rust.Makefile
 
 # Release artifacts embed the production core, so their smoke test must not use
 # the mock-only lifecycle expectations from test/sql.
-TEST_RUNNER_RELEASE=$(TEST_RUNNER) --test-dir test/release $(EXTRA_EXTENSIONS_PARAM) --external-extension build/release/$(EXTENSION_NAME).duckdb_extension
+TEST_RUNNER_RELEASE=duckdb_test_cli="$$(bash scripts/prepare-test-host.sh)" && \
+	$(PYTHON_VENV_BIN) test/release/cli_smoke.py "$$duckdb_test_cli" build/release/$(EXTENSION_NAME).duckdb_extension
 
 configure: venv platform extension_version
 
@@ -34,7 +38,7 @@ debug: build_extension_library_debug build_extension_with_metadata_debug
 release:
 	@bundle_path="$${DUCKFLIGHT_CORE_BUNDLE_PATH:-}"; \
 	if [ -z "$${bundle_path}" ] && grep -Eq '^[^#[:space:]]' core-assets.lock; then \
-		bundle_path="$$(./scripts/fetch-core-release.sh)"; \
+		bundle_path="$$(./scripts/fetch-core-release.sh)" || exit $$?; \
 	fi; \
 	if [ -n "$${bundle_path}" ]; then \
 		DUCKFLIGHT_CORE_BUNDLE_PATH="$${bundle_path}" $(MAKE) release_internal; \
