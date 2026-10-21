@@ -34,6 +34,7 @@ cmake -S "${source_dir}" -B "${source_dir}/build/release" \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_UNITTESTS=OFF -DBUILD_SHELL=ON \
   -DGIT_COMMIT_HASH="${commit}" \
   -DDUCKDB_EXPLICIT_VERSION=v2.0.0-alpha44357 >&2
-cmake --build "${source_dir}/build/release" --target duckdb \
+cmake --build "${source_dir}/build/release" --target shell \
   --parallel "${DUCKDB_TEST_BUILD_JOBS:-2}" >&2
+test -x "${source_dir}/build/release/duckdb"
 printf '%s\n' "${source_dir}/build/release/duckdb"
