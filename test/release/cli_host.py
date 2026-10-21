@@ -78,7 +78,9 @@ class CLIHost:
         output = []
         while True:
             try:
-                line = self.lines.get(timeout=30)
+                # Cold core initialization binds the compatibility catalog and
+                # can exceed 30 seconds on a busy build host.
+                line = self.lines.get(timeout=120)
             except queue.Empty as error:
                 raise TimeoutError(f"DuckDB CLI query timed out: {sql}") from error
             if line is None:
