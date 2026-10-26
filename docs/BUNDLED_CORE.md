@@ -65,7 +65,7 @@ uv run test/release/observability.py build/release/duckflight.duckdb_extension
 For DuckDB 2.0, build the native core against the final source pin
 `d54cbbe3df17e8e5ce68312f483b4155836112aa`. The matching core accepts the initial
 `v2.0.0-alpha44357` label and the final `v2.0.0` label. `core-assets.lock` selects
-the 2.0 payloads from `core-v0.1.15`. The Docker image still runs DuckDB 1.5.6
+the 2.0 payloads from `core-v0.1.16`. The Docker image still runs DuckDB 1.5.6
 and selects its existing `core-v0.1.13` payloads from `docker/core-assets.lock`.
 Preserve the old Community ref
 under `repo.variegata` if an explicit 1.5.6 binary update is needed; `ref_next` no
