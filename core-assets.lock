@@ -1,7 +1,7 @@
 # platform sha256 immutable_url
 #
 # Each immutable release asset is fetched, checksum-verified, and embedded by `make release`.
-linux_amd64 a31d2de1140f6d2351b9017e834fc11d3eb84aa93f70b7ecc58b1f6d4e1036eb https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.15/libduckflight_core_ffi-linux_amd64.so
-linux_arm64 4ada584b346ef58514ce1465386588b3b1be14206ebe93b9ab659e7086dd77d1 https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.15/libduckflight_core_ffi-linux_arm64.so
-osx_amd64 111483757432c3cd1a86c78ba75bb40b2b592cda6366d1b48add910e556302d2 https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.15/libduckflight_core_ffi-osx_amd64.dylib
-osx_arm64 680098628436289c1d65fe7c3d6eee585a4aca0f36cb17b5b76dcf77505999d4 https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.15/libduckflight_core_ffi-osx_arm64.dylib
+linux_amd64 08ab6588e11059ce6675cbf451a8d0698dc0dad8548fb8dd5a023626a7be8030 https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.16/libduckflight_core_ffi-linux_amd64.so
+linux_arm64 f86f6b41c28dfbe5a391010a8d72e10458bd39a9936e7a829676d20cc500ee6a https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.16/libduckflight_core_ffi-linux_arm64.so
+osx_amd64 9e23e3d8298963379ad73fa73b8f462a935e1109e92091c2b07501606f204c82 https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.16/libduckflight_core_ffi-osx_amd64.dylib
+osx_arm64 470533ae6b04a551edf89797fc65a80ac796642d347a70796fddcc2f71d1353e https://github.com/sidequery/duckflight-extension/releases/download/core-v0.1.16/libduckflight_core_ffi-osx_arm64.dylib
