@@ -1,7 +1,7 @@
 extension:
   name: duckflight
   description: Query DuckDB from PostgreSQL, Arrow Flight SQL, HTTP, and Quack clients
-  version: 0.1.12
+  version: 0.1.13
   language: Rust
   build: cargo
   license: MIT
@@ -40,8 +40,7 @@ docs:
     tokens, and optional TLS. See the
     [quick start and authentication guide](https://github.com/sidequery/duckflight-extension/blob/main/README.md#authentication-setup).
 
-    HTTP and Quack require an updated core build; the currently pinned core-v0.1.16 payloads
-    do not include them. HTTP returns Arrow IPC; Quack serves DuckDB's binary protocol at `/quack`.
+    HTTP returns Arrow IPC; Quack serves DuckDB's binary protocol at `/quack`.
     Both accept tokens, OIDC, or mTLS rather than PostgreSQL SCRAM users.
 
     Server-control functions:
