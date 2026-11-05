@@ -77,7 +77,10 @@ unsafe fn handle_ref<'a>(handle: DuckflightCoreHandle) -> Result<&'a MockCore, S
 
 fn validate_protocol(protocol: DuckflightProtocol) -> Result<(), String> {
     match protocol {
-        DuckflightProtocol::PGWIRE | DuckflightProtocol::FLIGHT_SQL => Ok(()),
+        DuckflightProtocol::PGWIRE
+        | DuckflightProtocol::FLIGHT_SQL
+        | DuckflightProtocol::HTTP
+        | DuckflightProtocol::QUACK => Ok(()),
         other => Err(format!("unsupported protocol value {}", other.0)),
     }
 }
@@ -87,6 +90,8 @@ fn bound_address(protocol: DuckflightProtocol, address: &str) -> String {
         match protocol {
             DuckflightProtocol::PGWIRE => "127.0.0.1:15432".into(),
             DuckflightProtocol::FLIGHT_SQL => "127.0.0.1:15051".into(),
+            DuckflightProtocol::HTTP => "127.0.0.1:18080".into(),
+            DuckflightProtocol::QUACK => "127.0.0.1:18081".into(),
             _ => unreachable!("protocol validated before binding"),
         }
     } else {
