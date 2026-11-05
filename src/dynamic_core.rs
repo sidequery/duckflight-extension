@@ -354,6 +354,8 @@ fn abi_protocol(protocol: Protocol) -> DuckflightProtocol {
     match protocol {
         Protocol::PgWire => DuckflightProtocol::PGWIRE,
         Protocol::FlightSql => DuckflightProtocol::FLIGHT_SQL,
+        Protocol::Http => DuckflightProtocol::HTTP,
+        Protocol::Quack => DuckflightProtocol::QUACK,
     }
 }
 
@@ -361,6 +363,8 @@ fn protocol_name(protocol: DuckflightProtocol) -> Result<String, String> {
     match protocol {
         DuckflightProtocol::PGWIRE => Ok("pgwire".into()),
         DuckflightProtocol::FLIGHT_SQL => Ok("flight".into()),
+        DuckflightProtocol::HTTP => Ok("http".into()),
+        DuckflightProtocol::QUACK => Ok("quack".into()),
         other => Err(format!("runtime returned unsupported protocol {}", other.0)),
     }
 }
@@ -435,6 +439,23 @@ fn check_status(status: DuckflightStatus, error: &ErrorBuffer) -> Result<(), Box
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protocols_round_trip_through_the_abi() {
+        for protocol in [
+            Protocol::PgWire,
+            Protocol::FlightSql,
+            Protocol::Http,
+            Protocol::Quack,
+        ] {
+            assert_eq!(
+                protocol_name(abi_protocol(protocol)).unwrap(),
+                protocol.as_str()
+            );
+        }
+        assert!(protocol_name(DuckflightProtocol(0)).is_err());
+        assert!(protocol_name(DuckflightProtocol(5)).is_err());
+    }
 
     // Model the ABI provider's all-or-nothing output behavior used by mock_core.
     unsafe extern "C" fn report_error(

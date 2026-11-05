@@ -19,6 +19,8 @@ mod dynamic_core;
 enum Protocol {
     PgWire,
     FlightSql,
+    Http,
+    Quack,
 }
 
 impl Protocol {
@@ -26,6 +28,8 @@ impl Protocol {
         match self {
             Self::PgWire => "pgwire",
             Self::FlightSql => "flight",
+            Self::Http => "http",
+            Self::Quack => "quack",
         }
     }
 
@@ -33,6 +37,8 @@ impl Protocol {
         match raw.trim().to_ascii_lowercase().as_str() {
             "pgwire" | "postgres" | "postgresql" => Ok(Self::PgWire),
             "flight" => Ok(Self::FlightSql),
+            "http" => Ok(Self::Http),
+            "quack" => Ok(Self::Quack),
             other => Err(format!("unsupported DuckFlight extension protocol: {other}").into()),
         }
     }
@@ -156,93 +162,58 @@ struct ServeBindData {
     config_file: String,
 }
 
-struct PgWireServe;
+macro_rules! define_serve {
+    ($name:ident, $protocol:expr) => {
+        struct $name;
 
-impl VTab for PgWireServe {
-    type InitData = EmitOnce;
-    type BindData = ServeBindData;
+        impl VTab for $name {
+            type InitData = EmitOnce;
+            type BindData = ServeBindData;
 
-    fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
-        bind.add_result_column("protocol", varchar());
-        bind.add_result_column("address", varchar());
-        Ok(ServeBindData {
-            address: bind.get_parameter(0).to_string(),
-            config_file: bind.get_parameter(1).to_string(),
-        })
-    }
+            fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+                bind.add_result_column("protocol", varchar());
+                bind.add_result_column("address", varchar());
+                Ok(ServeBindData {
+                    address: bind.get_parameter(0).to_string(),
+                    config_file: bind.get_parameter(1).to_string(),
+                })
+            }
 
-    fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
-        Ok(EmitOnce::new())
-    }
+            fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
+                Ok(EmitOnce::new())
+            }
 
-    fn func(
-        info: &TableFunctionInfo<Self>,
-        output: &mut DataChunkHandle,
-    ) -> Result<(), Box<dyn Error>> {
-        if info.get_init_data().done.swap(true, Ordering::Relaxed) {
-            output.set_len(0);
-            return Ok(());
+            fn func(
+                info: &TableFunctionInfo<Self>,
+                output: &mut DataChunkHandle,
+            ) -> Result<(), Box<dyn Error>> {
+                if info.get_init_data().done.swap(true, Ordering::Relaxed) {
+                    output.set_len(0);
+                    return Ok(());
+                }
+                let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
+                let address = state.core.start(
+                    $protocol,
+                    &info.get_bind_data().address,
+                    &info.get_bind_data().config_file,
+                )?;
+                set_string(output, 0, 0, $protocol.as_str())?;
+                set_string(output, 1, 0, &address)?;
+                output.set_len(1);
+                Ok(())
+            }
+
+            fn parameters() -> Option<Vec<LogicalTypeHandle>> {
+                Some(vec![varchar(), varchar()])
+            }
         }
-        let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
-        let address = state.core.start(
-            Protocol::PgWire,
-            &info.get_bind_data().address,
-            &info.get_bind_data().config_file,
-        )?;
-        set_string(output, 0, 0, Protocol::PgWire.as_str())?;
-        set_string(output, 1, 0, &address)?;
-        output.set_len(1);
-        Ok(())
-    }
-
-    fn parameters() -> Option<Vec<LogicalTypeHandle>> {
-        Some(vec![varchar(), varchar()])
-    }
+    };
 }
 
-struct FlightSqlServe;
-
-impl VTab for FlightSqlServe {
-    type InitData = EmitOnce;
-    type BindData = ServeBindData;
-
-    fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
-        bind.add_result_column("protocol", varchar());
-        bind.add_result_column("address", varchar());
-        Ok(ServeBindData {
-            address: bind.get_parameter(0).to_string(),
-            config_file: bind.get_parameter(1).to_string(),
-        })
-    }
-
-    fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
-        Ok(EmitOnce::new())
-    }
-
-    fn func(
-        info: &TableFunctionInfo<Self>,
-        output: &mut DataChunkHandle,
-    ) -> Result<(), Box<dyn Error>> {
-        if info.get_init_data().done.swap(true, Ordering::Relaxed) {
-            output.set_len(0);
-            return Ok(());
-        }
-        let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
-        let address = state.core.start(
-            Protocol::FlightSql,
-            &info.get_bind_data().address,
-            &info.get_bind_data().config_file,
-        )?;
-        set_string(output, 0, 0, Protocol::FlightSql.as_str())?;
-        set_string(output, 1, 0, &address)?;
-        output.set_len(1);
-        Ok(())
-    }
-
-    fn parameters() -> Option<Vec<LogicalTypeHandle>> {
-        Some(vec![varchar(), varchar()])
-    }
-}
+define_serve!(PgWireServe, Protocol::PgWire);
+define_serve!(FlightSqlServe, Protocol::FlightSql);
+define_serve!(HttpServe, Protocol::Http);
+define_serve!(QuackServe, Protocol::Quack);
 
 #[derive(Clone)]
 struct StopBindData {
@@ -394,6 +365,12 @@ fn register_extension(
         &state,
     )?;
     connection
+        .register_table_function_with_extra_info::<HttpServe, _>("duckflight_http_serve", &state)?;
+    connection.register_table_function_with_extra_info::<QuackServe, _>(
+        "duckflight_quack_serve",
+        &state,
+    )?;
+    connection
         .register_table_function_with_extra_info::<StopServer, _>("duckflight_stop", &state)?;
     connection
         .register_table_function_with_extra_info::<ServerList, _>("duckflight_servers", &state)?;
@@ -487,7 +464,8 @@ mod tests {
         assert_eq!(Protocol::parse("flight").unwrap(), Protocol::FlightSql);
         assert!(Protocol::parse("flight_sql").is_err());
         assert!(Protocol::parse("adbc").is_err());
-        assert!(Protocol::parse("http").is_err());
+        assert_eq!(Protocol::parse(" HTTP ").unwrap(), Protocol::Http);
+        assert_eq!(Protocol::parse(" QuAcK ").unwrap(), Protocol::Quack);
     }
 
     #[test]

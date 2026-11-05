@@ -30,11 +30,23 @@ select * from duckflight_flight_serve('127.0.0.1:0', '');
 ----
 flight	127.0.0.1:15051
 
+query TT
+select * from duckflight_http_serve('127.0.0.1:0', '');
+----
+http	127.0.0.1:18080
+
+query TT
+select * from duckflight_quack_serve('127.0.0.1:0', '');
+----
+quack	127.0.0.1:18081
+
 query TT rowsort
 select * from duckflight_servers();
 ----
 flight	127.0.0.1:15051
+http	127.0.0.1:18080
 pgwire	127.0.0.1:15432
+quack	127.0.0.1:18081
 
 query T
 select * from duckflight_stop('postgresql', '127.0.0.1:15432');
@@ -45,6 +57,31 @@ query T
 select * from duckflight_stop('flight', '127.0.0.1:15051');
 ----
 stopped flight server on 127.0.0.1:15051
+
+query T
+select * from duckflight_stop(' HTTP ', '127.0.0.1:18080');
+----
+stopped http server on 127.0.0.1:18080
+
+query TT
+select * from duckflight_servers();
+----
+quack	127.0.0.1:18081
+
+query T
+select * from duckflight_stop('QuAcK', '127.0.0.1:18081');
+----
+stopped quack server on 127.0.0.1:18081
+
+query T
+select * from duckflight_stop('http', '127.0.0.1:18080');
+----
+no http server on 127.0.0.1:18080
+
+query T
+select * from duckflight_stop('quack', '127.0.0.1:18081');
+----
+no quack server on 127.0.0.1:18081
 
 query TT
 select * from duckflight_servers();

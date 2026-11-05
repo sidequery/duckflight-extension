@@ -34,6 +34,8 @@ pub struct DuckflightProtocol(pub u32);
 impl DuckflightProtocol {
     pub const PGWIRE: Self = Self(1);
     pub const FLIGHT_SQL: Self = Self(2);
+    pub const HTTP: Self = Self(3);
+    pub const QUACK: Self = Self(4);
 }
 
 #[repr(C)]
@@ -176,5 +178,7 @@ mod tests {
         assert!(!DuckflightStatus::INTERNAL.is_ok());
         assert_eq!(DuckflightProtocol::PGWIRE.0, 1);
         assert_eq!(DuckflightProtocol::FLIGHT_SQL.0, 2);
+        assert_eq!(DuckflightProtocol::HTTP.0, 3);
+        assert_eq!(DuckflightProtocol::QUACK.0, 4);
     }
 }

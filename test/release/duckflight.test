@@ -30,7 +30,8 @@ NULL	3	3
 query I
 select count(*) from duckdb_functions()
 where function_type = 'table' and function_name in
-  ('duckflight_pg_serve', 'duckflight_flight_serve', 'duckflight_stop',
+  ('duckflight_pg_serve', 'duckflight_flight_serve', 'duckflight_http_serve',
+   'duckflight_quack_serve', 'duckflight_stop',
    'duckflight_servers', 'duckflight_core_status');
 ----
-5
+7

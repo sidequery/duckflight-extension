@@ -1,6 +1,6 @@
 # DuckFlight DuckDB extension
 
-DuckFlight turns any DuckDB database into a PostgreSQL and Arrow Flight SQL server. Query it with
+DuckFlight turns any DuckDB database into a PostgreSQL, Arrow Flight SQL, HTTP, and Quack server. Query it with
 `psql`, PostgreSQL drivers and BI tools, ADBC Flight SQL clients, or another DuckDB instance through
 Airport. Every client reads and writes the same live database—there is no second service to run and
 no data to export or copy.
@@ -229,8 +229,12 @@ SQL compatibility layer.
 
 ### Start, inspect, and stop servers
 
-Run these in the DuckDB instance that loads the extension. Both protocols use that same database,
+Run these in the DuckDB instance that loads the extension. All protocols use that same database,
 including an in-memory database. Keep the host process running while clients connect.
+
+HTTP and Quack require the corresponding updated core runtime. The currently pinned
+`core-v0.1.16` release payloads do not support these two protocols; build the core and
+extension together with `scripts/build-bundled.sh` until updated payloads are published.
 
 ```sql
 load duckflight;
@@ -238,10 +242,14 @@ load duckflight;
 select * from duckflight_core_status();
 select * from duckflight_pg_serve('127.0.0.1:5433', '/path/to/duckflight.toml');
 select * from duckflight_flight_serve('127.0.0.1:31337', '/path/to/duckflight.toml');
+select * from duckflight_http_serve('127.0.0.1:4080', '/path/to/duckflight.toml');
+select * from duckflight_quack_serve('127.0.0.1:4081', '/path/to/duckflight.toml');
 select * from duckflight_servers();
 
 select * from duckflight_stop('pgwire', '127.0.0.1:5433');
 select * from duckflight_stop('flight', '127.0.0.1:31337');
+select * from duckflight_stop('http', '127.0.0.1:4080');
+select * from duckflight_stop('quack', '127.0.0.1:4081');
 ```
 
 | Function | Arguments | Returned columns |
@@ -249,6 +257,8 @@ select * from duckflight_stop('flight', '127.0.0.1:31337');
 | `duckflight_core_status()` | None | `loaded` (boolean), `abi_version` (unsigned bigint), `detail` (varchar) |
 | `duckflight_pg_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
 | `duckflight_flight_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
+| `duckflight_http_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
+| `duckflight_quack_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
 | `duckflight_servers()` | None | `protocol`, `address` (varchar), one row per listener |
 | `duckflight_stop(protocol, address)` | Two varchar values | `status` (varchar) |
 
@@ -256,7 +266,7 @@ Start functions return after starting a background listener. Use `host:port` for
 port `0` asks the operating system to choose a free port. The returned address is authoritative:
 use it when connecting or stopping, including when a hostname resolves to an IP address.
 
-`duckflight_stop` accepts `pgwire` (also `postgres` or `postgresql`) and `flight`. Stopping an
+`duckflight_stop` accepts `pgwire` (also `postgres` or `postgresql`), `flight`, `http`, and `quack`. Stopping an
 address that is not registered returns a `no ... server on ...` status. The public extension's
 Flight function is `duckflight_flight_serve`; `duckflight_adbc_serve` and the `adbc` protocol name
 from older core examples are not supported here. ADBC clients connect to the Flight SQL listener.
@@ -265,8 +275,22 @@ from older core examples are not supported here. ADBC clients connect to the Fli
 `duckflight_servers()` to list listeners. `abi_version` is the extension/core interface version,
 not the DuckDB or DuckFlight release version.
 
-Both listeners require an authentication config, and non-loopback listeners require TLS. See
+Listeners require an authentication config, and non-loopback listeners require TLS. See
 [Authentication setup](#authentication-setup) for config creation and client connection examples.
+
+HTTP and Quack accept configured bearer tokens, OIDC identities, or mTLS identities;
+a PostgreSQL users-only config is insufficient for these listeners. The HTTP listener
+provides the Arrow IPC API, including `POST /streaming-query`, `/streaming-mutate`,
+`/streaming-ingest`, `/tx/begin`, and `/tx/end`. The Quack listener serves DuckDB's
+binary protocol at `POST /quack`; it is a separate listener from the Arrow IPC API.
+Both use the explicit TOML authentication/TLS configuration, not standalone server
+authentication environment variables.
+
+Run the real-host protocol smoke test against a freshly bundled extension:
+
+```sh
+uv run test/release/http_quack_smoke.py /path/to/duckdb build/release/duckflight.duckdb_extension
+```
 
 ### Common PostgreSQL compatibility helpers
 
@@ -285,7 +309,7 @@ order by function_name;
 ```
 
 The Community Extensions page collects these comments automatically after loading the extension.
-The five native server-control functions are documented above because the v1 C API does not
+The seven native server-control functions are documented above because the v1 C API does not
 expose description setters for C API table functions.
 
 | Area | Useful signatures | Purpose |
