@@ -12,7 +12,7 @@ from typing import Self
 
 
 class CLIHost:
-    def __init__(self, executable: Path) -> None:
+    def __init__(self, executable: Path, *, allow_unsigned: bool = True) -> None:
         # This context manager owns the file until the child has exited.
         self.stderr = tempfile.TemporaryFile(mode="w+t")  # noqa: SIM115
         try:
@@ -20,7 +20,7 @@ class CLIHost:
                 [
                     str(executable.resolve()),
                     "-no-init",
-                    "-unsigned",
+                    *(["-unsigned"] if allow_unsigned else []),
                     "-batch",
                     ":memory:",
                 ],

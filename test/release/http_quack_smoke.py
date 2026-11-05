@@ -6,7 +6,8 @@
 """Exercise HTTP and binary Quack through SQL functions in a real DuckDB host.
 
 Run with a newly built runtime via DUCKFLIGHT_CORE_PATH and the debug extension,
-or pass a bundled extension containing the same runtime.
+or pass a bundled extension containing the same runtime. Use --repository PREFIX
+to test a signed installation with unsigned extensions disabled.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import subprocess
 import tempfile
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 import pyarrow.ipc
@@ -116,7 +118,49 @@ def assert_closed(address: str) -> None:
         pass
 
 
-def run(cli: Path, extension: Path, tls: bool) -> None:
+@contextmanager
+def test_host(
+    cli: Path, fixtures: Path, extension: Path | None, repository: str | None
+):
+    repository_name = "duckflight_smoke_" + secrets.token_hex(8)
+    try:
+        with CLIHost(cli, allow_unsigned=repository is None) as host:
+            if repository is not None:
+
+                def literal(value: str) -> str:
+                    return "'" + value.replace("'", "''") + "'"
+
+                # The CLI cannot set the startup-only repository trust directory.
+                # Register a unique name and remove it even if the test host fails.
+                host.execute(
+                    "set allow_extension_repositories = 'allowed'; "
+                    "set extension_directories = ["
+                    + literal(str(fixtures / "installed"))
+                    + f"]; create extension repository {repository_name} with prefix "
+                    + literal(repository)
+                    + f"; install duckflight from {repository_name}; "
+                    f"load duckflight from {repository_name}"
+                )
+                assert host.execute(
+                    "select current_setting('allow_unsigned_extensions')"
+                ).fetchone() == (False,)
+            else:
+                assert extension is not None
+                host.execute(
+                    "load '" + str(extension.resolve()).replace("'", "''") + "'"
+                )
+            yield host
+    finally:
+        if repository is not None:
+            with CLIHost(cli, allow_unsigned=False) as cleanup:
+                cleanup.execute(
+                    f"drop extension repository if exists {repository_name}"
+                )
+
+
+def run(
+    cli: Path, extension: Path | None, tls: bool, repository: str | None = None
+) -> None:
     with tempfile.TemporaryDirectory(prefix="duckflight-http-quack-") as directory:
         fixtures = Path(directory)
         token = secrets.token_urlsafe(32)
@@ -156,8 +200,7 @@ def run(cli: Path, extension: Path, tls: bool) -> None:
                 file.write('\n[tls]\ncert = "server.crt"\nkey = "server.key"\n')
             context = ssl.create_default_context(cafile=str(fixtures / "server.crt"))
 
-        with CLIHost(cli) as host:
-            host.execute("load '" + str(extension.resolve()).replace("'", "''") + "'")
+        with test_host(cli, fixtures, extension, repository) as host:
             assert host.execute(
                 "select loaded from duckflight_core_status()"
             ).fetchone() == (True,)
@@ -277,7 +320,10 @@ def run(cli: Path, extension: Path, tls: bool) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cli", type=Path)
-    parser.add_argument("extension", type=Path)
+    parser.add_argument("extension", type=Path, nargs="?")
+    parser.add_argument("--repository", help="signed extension repository prefix")
     args = parser.parse_args()
-    run(args.cli, args.extension, tls=False)
-    run(args.cli, args.extension, tls=True)
+    if (args.extension is None) == (args.repository is None):
+        parser.error("provide either an extension path or --repository")
+    run(args.cli, args.extension, tls=False, repository=args.repository)
+    run(args.cli, args.extension, tls=True, repository=args.repository)

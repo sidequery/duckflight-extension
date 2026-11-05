@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["duckdb-sqllogictest @ git+https://github.com/duckdb/duckdb-sqllogictest-python@2ac8dbc012ddbd96a57dca37784fd8ee3c0eb021"]
+# ///
 """Run the release SQL smoke suite in the exact pinned CLI instead of PyPI."""
 
 from __future__ import annotations

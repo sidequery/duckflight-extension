@@ -48,12 +48,19 @@ build must download the exact platform library before Cargo runs, verify it, and
 single `.duckdb_extension`; there is no runtime download or sidecar installation. Do not use a
 `latest` URL.
 
-`core-assets.lock` pins the four Linux and macOS `core-v0.1.10` payloads used by the standard
+`core-assets.lock` pins the four Linux and macOS `core-v0.1.17` payloads used by the standard
 `make release` invoked by DuckDB's reusable CI. The downloaded library stays under the ignored
 `build/` tree and is embedded into the final extension; it is never committed or installed on the
 user's machine as a sidecar. Release smoke tests load that embedded production core. Mock lifecycle
 tests remain separate so the distribution matrix does not start network listeners. Windows is
 explicitly excluded from the initial Community release rather than shipping an unvalidated payload.
+
+For production release artifacts, dispatch `Release binaries` on the release commit.
+It builds all four native platforms without restoring or saving compiler caches, embeds the
+checksum-pinned core, and runs SQL, HTTP/Quack, host-session, and OIDC/health checks before
+uploading artifacts. Signing and publication remain separate steps. The HTTP/Quack smoke
+runner also accepts `--repository PREFIX` to verify signed installation with unsigned
+extensions disabled.
 
 Before publishing a new core, exercise the final bundled extension with real authenticated clients:
 
@@ -65,7 +72,7 @@ uv run test/release/observability.py build/release/duckflight.duckdb_extension
 For DuckDB 2.0, build the native core against the final source pin
 `d54cbbe3df17e8e5ce68312f483b4155836112aa`. The matching core accepts the initial
 `v2.0.0-alpha44357` label and the final `v2.0.0` label. `core-assets.lock` selects
-the 2.0 payloads from `core-v0.1.16`. The Docker image still runs DuckDB 1.5.6
+the 2.0 payloads from `core-v0.1.17`. The Docker image still runs DuckDB 1.5.6
 and selects its existing `core-v0.1.13` payloads from `docker/core-assets.lock`.
 Preserve the old Community ref
 under `repo.variegata` if an explicit 1.5.6 binary update is needed; `ref_next` no
