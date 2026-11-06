@@ -232,14 +232,7 @@ SQL compatibility layer.
 Run these in the DuckDB instance that loads the extension. All protocols use that same database,
 including an in-memory database. Keep the host process running while clients connect.
 
-HTTP and Quack are included in extension v0.1.13 with the bundled `core-v0.1.17` runtime.
-They share the host database with PgWire and Flight SQL.
-
-The DuckDB 2.0 build of extension v0.1.14 bundles `core-v0.1.18`, which fixes
-schema-qualified PostgreSQL queries and client metadata discovery when connected
-to an attached database.
-Extension v0.1.15 bundles `core-v0.1.19` to fix JDBC array type discovery during
-metadata refresh.
+HTTP and Quack share the host database with PgWire and Flight SQL.
 
 ```sql
 load duckflight;
@@ -731,9 +724,7 @@ An authorized release build embeds the private core directly into the extension:
 ```
 
 See [docs/BUNDLED_CORE.md](docs/BUNDLED_CORE.md) for the local build and per-platform GitHub Release
-asset model. The platform payloads are published in the
-[`core-v0.1.19` release](https://github.com/sidequery/duckflight-extension/releases/tag/core-v0.1.19)
-and checksum-pinned in `core-assets.lock`.
+asset model. The current payloads and their checksums are pinned in `core-assets.lock`.
 
 <details>
 <summary>Developing without a bundled core</summary>
