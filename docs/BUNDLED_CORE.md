@@ -48,7 +48,7 @@ build must download the exact platform library before Cargo runs, verify it, and
 single `.duckdb_extension`; there is no runtime download or sidecar installation. Do not use a
 `latest` URL.
 
-`core-assets.lock` pins the four Linux and macOS `core-v0.1.20` payloads used by the standard
+`core-assets.lock` pins the four Linux and macOS `core-v0.1.21` payloads used by the standard
 `make release` invoked by DuckDB's reusable CI. The downloaded library stays under the ignored
 `build/` tree and is embedded into the final extension; it is never committed or installed on the
 user's machine as a sidecar. Release smoke tests load that embedded production core. Mock lifecycle
@@ -72,7 +72,7 @@ uv run test/release/observability.py build/release/duckflight.duckdb_extension
 For DuckDB 2.0, build the native core against the final source pin
 `d54cbbe3df17e8e5ce68312f483b4155836112aa`. The matching core accepts the initial
 `v2.0.0-alpha44357` label and the final `v2.0.0` label. `core-assets.lock` selects
-the 2.0 payloads from `core-v0.1.20`. The Docker image still runs DuckDB 1.5.6
+the 2.0 payloads from `core-v0.1.21`. The Docker image still runs DuckDB 1.5.6
 and selects its existing `core-v0.1.13` payloads from `docker/core-assets.lock`.
 Preserve the old Community ref
 under `repo.variegata` if an explicit 1.5.6 binary update is needed; `ref_next` no
