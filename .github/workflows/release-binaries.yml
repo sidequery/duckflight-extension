@@ -88,6 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           uv run --python 3.12 test/release/cli_smoke.py build/release-host/duckdb dist/duckflight.duckdb_extension
+          uv run --python 3.12 test/release/pgwire_attached_database.py build/release-host/duckdb dist/duckflight.duckdb_extension
           uv run --python 3.12 test/release/http_quack_smoke.py build/release-host/duckdb dist/duckflight.duckdb_extension
           uv run --python 3.12 test/release/host_sessions.py dist/duckflight.duckdb_extension --duckdb-cli build/release-host/duckdb
           uv run --python 3.12 test/release/oidc_health.py dist/duckflight.duckdb_extension --duckdb-cli build/release-host/duckdb
