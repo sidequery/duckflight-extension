@@ -92,6 +92,14 @@ def run(cli: Path, extension: Path | None, repository: str | None) -> None:
                     ).fetchall()
                     if helpers != [(2, 1, "NULL", "'hi'", "x")]:
                         raise AssertionError(f"metadata helpers failed: {helpers}")
+                    series = connection.execute(
+                        "select n from generate_series(array_lower(array[1, 2], 1), "
+                        "array_upper(array[1, 2], 1)) as series(n)"
+                    ).fetchall()
+                    if series != [(1,), (2,)]:
+                        raise AssertionError(
+                            f"array bounds failed in table function: {series}"
+                        )
                     if connection.execute("select 1").fetchone() != (1,):
                         raise AssertionError(
                             "connection unusable after metadata queries"
