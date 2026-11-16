@@ -621,6 +621,25 @@ Shutdown rejects new work while allowing admitted queries and result fetches to 
 within the grace period, then interrupts outstanding execution. Zero grace forces immediate
 shutdown. Stopping one listener leaves other listeners running.
 
+#### PostgreSQL cross-catalog reads
+
+A PostgreSQL session follows PostgreSQL's rule against cross-database references: an
+explicit catalog other than the connected database fails with SQLSTATE `3D000`. A
+PostgreSQL listener can opt in to reading other attached catalogs:
+
+```toml
+[pgwire]
+cross_catalog_reads = true
+```
+
+With the setting on, a read-only `SELECT` (including joins, subqueries, CTEs and set
+operations) may name `catalog.schema.relation` in any attached, non-internal catalog, the
+same set a client can select as its startup database. Two-part and unqualified names still
+resolve in the connected database. Writes, DDL, writable CTEs, `COPY`, `EXPLAIN`, and
+functions or types qualified with another catalog keep the default rule, and catalog
+metadata still describes only the connected database. The setting requires DuckFlight
+0.1.18 or newer: earlier versions reject a config file that contains a `[pgwire]` table.
+
 #### Optional mTLS
 
 mTLS is an advanced alternative for deployments that manage client certificates:
