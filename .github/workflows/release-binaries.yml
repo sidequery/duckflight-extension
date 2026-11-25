@@ -93,6 +93,8 @@ jobs:
           uv run --python 3.12 test/release/pgwire_cross_catalog.py build/release-host/duckdb dist/duckflight.duckdb_extension
           uv run --python 3.12 test/release/http_quack_smoke.py build/release-host/duckdb dist/duckflight.duckdb_extension
           uv run --python 3.12 test/release/quack_client.py build/release-host/duckdb dist/duckflight.duckdb_extension
+          uv run --python 3.12 test/release/host_only_functions.py build/release-host/duckdb dist/duckflight.duckdb_extension
+          uv run --python 3.12 test/release/setup_functions.py build/release-host/duckdb dist/duckflight.duckdb_extension
           uv run --python 3.12 test/release/host_sessions.py dist/duckflight.duckdb_extension --duckdb-cli build/release-host/duckdb
           uv run --python 3.12 test/release/oidc_health.py dist/duckflight.duckdb_extension --duckdb-cli build/release-host/duckdb
           uv run --python 3.12 test/docs_snippets.py build/release-host/duckdb dist/duckflight.duckdb_extension --skip-missing-tools

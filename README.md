@@ -116,8 +116,9 @@ non-loopback address will not start without TLS. The full guide is in
 
 Seven table functions control the servers: `duckflight_pg_serve`, `duckflight_flight_serve`,
 `duckflight_http_serve`, `duckflight_quack_serve`, `duckflight_servers`, `duckflight_stop`, and
-`duckflight_core_status`. Their arguments and results, along with the PostgreSQL compatibility
-helpers, are in the [SQL reference](docs/SQL_FUNCTIONS.md).
+`duckflight_core_status`. Three more create credentials: `duckflight_token_create`,
+`duckflight_user_create` and `duckflight_config_check`. Their arguments and results, along with the
+PostgreSQL compatibility helpers, are in the [SQL reference](docs/SQL_FUNCTIONS.md).
 
 ## Security
 
