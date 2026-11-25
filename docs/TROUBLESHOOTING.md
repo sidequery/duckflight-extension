@@ -109,8 +109,10 @@ for reads. `quack_query` works with a read-only token.
 
 ### Quack: `Unsupported protocol error for HTTP POST`
 
-The listener has TLS and the client did not get the certificate fingerprint. Pass
-`ssl_fingerprint`; see [Clients](CLIENTS.md#quack-duckdb-to-duckdb).
+The client sent plain HTTP to a listener that has TLS. DuckDB's quack client defaults to plain
+HTTP for `localhost` and to HTTPS for every other host. For a TLS listener on `localhost`, pass
+`disable_ssl := false`, or `ssl_fingerprint` if the certificate is self-signed; see
+[Clients](CLIENTS.md#quack-duckdb-to-duckdb).
 
 ### Quack: `invalid SQL` on `insert` into an attached catalog
 

@@ -34,7 +34,7 @@ listener that should see it.
 | PostgreSQL | User and password | `postgresql://alice@127.0.0.1:5433/memory` | add `sslmode=verify-full` |
 | Flight SQL | User and password, or bearer token | `grpc://127.0.0.1:31337` | `grpc+tls://host:31337` |
 | HTTP | Bearer token | `http://127.0.0.1:4080` | `https://host:4080` |
-| Quack | Bearer token | `quack:127.0.0.1:4081` with `disable_ssl` | `quack:host:4081` with `ssl_fingerprint` |
+| Quack | Bearer token | `quack:127.0.0.1:4081` | `quack:host:4081` |
 
 ## PostgreSQL
 
@@ -281,8 +281,17 @@ select * from remote.main.trips order by id;
 `getenv` is available in the DuckDB CLI. Elsewhere, store the token in a secret with
 `create secret (type quack, token '...')` and leave `token` out of `attach`.
 
-The URI must start with `quack:`. `disable_ssl` is for loopback listeners only. Against a listener
-with TLS, drop it and pass the SHA-256 fingerprint of the server certificate:
+The URI must start with `quack:`. Whether the client uses TLS is decided by the client, from the
+host name:
+
+| Host in the URI | Default | To change it |
+| --- | --- | --- |
+| `localhost`, `127.0.0.1`, `::1` | Plain HTTP | `disable_ssl := false`, or `ssl_fingerprint`, to use TLS |
+| Anything else | HTTPS, verified against the system's certificate authorities | `disable_ssl := true` for plain HTTP |
+
+So a listener with a certificate from a public or otherwise trusted CA needs no TLS options at all.
+`ssl_fingerprint` is for certificates the client cannot verify through a CA, such as a self-signed
+one: it pins the connection to the certificate with that SHA-256 fingerprint.
 
 ```sql
 select *
