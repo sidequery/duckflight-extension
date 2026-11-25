@@ -34,7 +34,7 @@ listener that should see it.
 | PostgreSQL | User and password | `postgresql://alice@127.0.0.1:5433/memory` | add `sslmode=verify-full` |
 | Flight SQL | User and password, or bearer token | `grpc://127.0.0.1:31337` | `grpc+tls://host:31337` |
 | HTTP | Bearer token | `http://127.0.0.1:4080` | `https://host:4080` |
-| Quack | Bearer token | `http://127.0.0.1:4081/quack` | `https://host:4081/quack` |
+| Quack | Bearer token | `quack:127.0.0.1:4081` with `disable_ssl` | `quack:host:4081` with `ssl_fingerprint` |
 
 ## PostgreSQL
 
@@ -229,16 +229,79 @@ print(pyarrow.ipc.open_stream(open("trips.arrow", "rb")).read_all())
 
 A missing or wrong token returns `401`. A token without the needed scope returns `403`.
 
-## Quack
+## Quack (DuckDB to DuckDB)
 
-The Quack listener serves DuckDB's binary client protocol at `POST /quack`, with content type
-`application/vnd.duckdb`. It is a separate listener from the Arrow IPC API and accepts the same
-credentials as HTTP. The bearer token travels inside the protocol's connect message rather than in
-an `Authorization` header.
+Quack is DuckDB's own client/server protocol. A second DuckDB instance connects with the official
+`quack` extension, so results stay in DuckDB's native format end to end. The listener accepts the
+same credentials as HTTP.
+
+`quack_query` works with a read-only token. Attaching a catalog needs a token with `query:mutate`,
+even if you only read through it. Create one and put it in `DUCKFLIGHT_TOKEN`:
+
+```sh doctest
+uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.20/scripts/duckflight_auth.py token add duckdb \
+  --scope query:execute --scope query:mutate --scope transaction:manage
+```
+
+Then start the listener on the host, so that it reads the new token:
 
 ```sql doctest=host
 select * from duckflight_quack_serve('127.0.0.1:4081', 'duckflight.toml');
 ```
+
+From another DuckDB, run a single query:
+
+```sql doctest=duckdb
+install quack;
+load quack;
+
+select *
+from quack_query(
+    'quack:127.0.0.1:4081',
+    'select * from trips order by id',
+    disable_ssl := true,
+    token := getenv('DUCKFLIGHT_TOKEN')
+);
+```
+
+Or attach the server as a catalog and query its tables directly:
+
+```sql doctest=duckdb
+load quack;
+
+attach 'quack:127.0.0.1:4081' as remote (
+    type quack,
+    token getenv('DUCKFLIGHT_TOKEN'),
+    disable_ssl true
+);
+
+select * from remote.main.trips order by id;
+```
+
+`getenv` is available in the DuckDB CLI. Elsewhere, store the token in a secret with
+`create secret (type quack, token '...')` and leave `token` out of `attach`.
+
+The URI must start with `quack:`. `disable_ssl` is for loopback listeners only. Against a listener
+with TLS, drop it and pass the SHA-256 fingerprint of the server certificate:
+
+```sql
+select *
+from quack_query(
+    'quack:db.example.com:4081',
+    'select count(*) from trips',
+    token := getenv('DUCKFLIGHT_TOKEN'),
+    ssl_fingerprint := 'AB:CD:...'
+);
+```
+
+```sh
+openssl x509 -in server.crt -noout -fingerprint -sha256
+```
+
+Send writes through `quack_query`, or create tables through
+an attached catalog with `create table remote.main.t as ...`. A plain
+`insert into remote.main.trips values (...)` through an attached catalog currently fails with
+`invalid SQL`.
 
 ## Health checks
 

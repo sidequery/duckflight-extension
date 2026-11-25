@@ -13,7 +13,7 @@ select * from duckflight_servers();
 ### `loaded` is false: `DuckFlight host factory requires DuckDB v2.0.0; host is v2.0.1`
 
 The extension loaded but its core only runs on the exact DuckDB release it was built for. This
-happens today on DuckDB 2.0.1, where Community serves an older build. Use a DuckDB version from the
+happens on DuckDB 2.0.1 until its build is published, because Community serves an older one. Use a DuckDB version from the
 [compatibility table](INSTALL.md#which-build-you-get).
 
 ### `Failed to install remote extension "duckflight"`
@@ -93,6 +93,29 @@ does not support. Use `postgresql+psycopg2`. Psycopg 3 itself works when used di
 PostgreSQL sessions cannot reference other databases by default. Enable
 [`cross_catalog_reads`](CONFIGURATION.md#pgwire) to allow read-only queries across attached
 catalogs.
+
+### Quack: `Invalid DuckDB Quack RPC URI, needs to start with 'quack:'`
+
+DuckDB's `quack` client takes `quack:host:port`, not an `http://` URL.
+
+### Quack: `Invalid API key`
+
+The token passed to `quack_query` or `attach` is not in the listener's config.
+
+### Quack: `Quack session SQL is outside its fixed capability`
+
+`attach ... (type quack)` was given a token without `query:mutate`. Attaching needs that scope even
+for reads. `quack_query` works with a read-only token.
+
+### Quack: `Unsupported protocol error for HTTP POST`
+
+The listener has TLS and the client did not get the certificate fingerprint. Pass
+`ssl_fingerprint`; see [Clients](CLIENTS.md#quack-duckdb-to-duckdb).
+
+### Quack: `invalid SQL` on `insert` into an attached catalog
+
+`insert into remote.main.t values (...)` through a catalog attached with `type quack` currently
+fails. Run the statement with `quack_query` instead.
 
 ### Airport will not load on DuckDB 2.0
 

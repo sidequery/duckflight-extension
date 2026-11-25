@@ -2,7 +2,7 @@
 
 DuckFlight is a DuckDB extension that turns the database you already have open into a server.
 Load it, start a listener, and query the same live database from `psql`, PostgreSQL drivers and BI
-tools, Arrow Flight SQL (ADBC) clients, or plain HTTP. There is no second service to run and no data
+tools, Arrow Flight SQL (ADBC) clients, another DuckDB, or plain HTTP. There is no second service to run and no data
 to export or copy: every client reads and writes the database that loaded the extension.
 
 ## Quickstart
@@ -66,7 +66,7 @@ All listeners serve the same database and can run at the same time.
 | PostgreSQL wire | `duckflight_pg_serve` | `psql`, Psycopg, JDBC, SQLAlchemy, BI tools | Users, OIDC, mTLS |
 | Arrow Flight SQL | `duckflight_flight_serve` | ADBC drivers, DuckDB's Airport extension | Users, bearer tokens, OIDC, mTLS |
 | HTTP (Arrow IPC) | `duckflight_http_serve` | Anything that can `POST` JSON and read Arrow | Bearer tokens, OIDC, mTLS |
-| Quack | `duckflight_quack_serve` | DuckDB's binary client protocol | Bearer tokens, OIDC, mTLS |
+| Quack | `duckflight_quack_serve` | Another DuckDB, through its `quack` extension | Bearer tokens, OIDC, mTLS |
 
 Working connection examples for each are in [Clients](docs/CLIENTS.md).
 
@@ -79,7 +79,7 @@ supported.
 | --- | --- | --- | --- |
 | 2.0.0 | Community or Sidequery repository | 0.1.20 | All four protocols |
 | 1.5.6 | Community | 0.1.12 | PostgreSQL and Flight SQL only |
-| 2.0.1 | No working published build | | Community serves 0.1.17, which loads but cannot start its core on 2.0.1. [SQL access controls](docs/ACCESS_CONTROL.md) need a 2.0.1 build |
+| 2.0.1 | Build coming | | Until it ships, Community serves 0.1.17, which loads but cannot start its core on 2.0.1. [SQL access controls](docs/ACCESS_CONTROL.md) need the 2.0.1 build |
 
 Check what you have with:
 

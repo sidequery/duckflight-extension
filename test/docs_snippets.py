@@ -15,6 +15,7 @@ A fenced block opts in through its info string:
 
     ```sql doctest=host    SQL run in the DuckDB process that loaded the extension
     ```sql doctest=pg      SQL run as `alice` through the PostgreSQL listener
+    ```sql doctest=duckdb  SQL run in a second DuckDB process, as a client would
     ```python doctest      a Python program
     ```sh doctest          a shell script
 
@@ -375,12 +376,28 @@ class Scenario:
         if result.returncode != 0:
             raise SnippetError(self.redact(result.stdout + result.stderr))
 
+    def run_duckdb_client(self, block: Block) -> None:
+        result = subprocess.run(
+            [str(self.arguments.cli), "-no-init", "-batch", ":memory:"],
+            input=f".bail on\n{block.code}\n",
+            check=False,
+            cwd=self.directory,
+            env=self.environment,
+            capture_output=True,
+            text=True,
+            timeout=BLOCK_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            raise SnippetError(self.redact(result.stdout + result.stderr))
+
     def run(self, block: Block) -> str:
         """Run one block; return "PASS" or a "SKIP ..." reason."""
         if block.language == "sql" and block.role == "host":
             self.run_host(block)
         elif block.language == "sql" and block.role == "pg":
             self.run_pg(block)
+        elif block.language == "sql" and block.role == "duckdb":
+            self.run_duckdb_client(block)
         elif block.language == "python" and block.role == "run":
             self.run_python(block)
         elif block.language == "sh" and block.role == "run":

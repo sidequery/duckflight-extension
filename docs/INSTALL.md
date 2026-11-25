@@ -21,8 +21,8 @@ Supported platforms are Linux and macOS on amd64 and arm64 (`linux_amd64`, `linu
 `osx_amd64`, `osx_arm64`). Windows, WebAssembly and Linux musl are not supported.
 
 On DuckDB 2.0.1 the extension loads but `duckflight_core_status()` reports
-`DuckFlight host factory requires DuckDB v2.0.0; host is v2.0.1`. Use DuckDB 2.0.0 until a 2.0.1
-build is published.
+`DuckFlight host factory requires DuckDB v2.0.0; host is v2.0.1`. A 2.0.1 build is on the way; use
+DuckDB 2.0.0 until it is published.
 
 ## Check your installation
 
