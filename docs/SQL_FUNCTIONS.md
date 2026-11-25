@@ -12,6 +12,10 @@ Loading DuckFlight adds three groups of SQL objects to the host database:
 Run these in the DuckDB process that loaded the extension. Every listener serves that process's
 database, including an in-memory one, for as long as the process stays running.
 
+Starting, stopping and listing listeners is reserved for that process. A client connected through
+a listener gets an error from these functions whatever its credentials allow;
+`duckflight_core_status()` stays available to it.
+
 ```sql doctest=host
 load duckflight;
 

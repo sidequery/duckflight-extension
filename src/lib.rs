@@ -61,6 +61,10 @@ trait CoreRuntime: Send + Sync {
 
     fn snapshots(&self) -> Result<Vec<(String, String)>, Box<dyn Error>>;
 
+    /// Whether the runtime runs statements on this DuckDB connection, as it does for its
+    /// listeners' sessions. When in doubt the answer is yes.
+    fn owns_connection(&self, connection_id: u64) -> bool;
+
     fn status(&self) -> CoreStatus;
 }
 
@@ -91,6 +95,11 @@ impl CoreRuntime for UnavailableCore {
 
     fn snapshots(&self) -> Result<Vec<(String, String)>, Box<dyn Error>> {
         Ok(Vec::new())
+    }
+
+    fn owns_connection(&self, _: u64) -> bool {
+        // Without a runtime there are no listeners, so every connection is the host's.
+        false
     }
 
     fn status(&self) -> CoreStatus {
@@ -156,6 +165,43 @@ fn chunk_bounds(total: usize, start: usize, capacity: usize) -> Option<Range<usi
     Some(start..start.saturating_add(capacity).min(total))
 }
 
+// duckdb-rs keeps the raw bind handle private. `BindInfo` holds nothing else, which this checks,
+// so the handle is the value at its address.
+const _: () = assert!(
+    std::mem::size_of::<BindInfo>() == std::mem::size_of::<duckdb::ffi::duckdb_bind_info>()
+);
+
+/// The id of the DuckDB connection that is binding a table function.
+fn binding_connection_id(bind: &BindInfo) -> Result<u64, Box<dyn Error>> {
+    unsafe {
+        let raw = std::ptr::from_ref(bind)
+            .cast::<duckdb::ffi::duckdb_bind_info>()
+            .read();
+        let mut context: duckdb::ffi::duckdb_client_context = std::ptr::null_mut();
+        duckdb::ffi::duckdb_table_function_get_client_context(raw, &mut context);
+        if context.is_null() {
+            return Err("DuckDB returned no client context for this call".into());
+        }
+        let connection_id = duckdb::ffi::duckdb_client_context_get_connection_id(context);
+        duckdb::ffi::duckdb_destroy_client_context(&mut context);
+        Ok(connection_id)
+    }
+}
+
+/// Starting, stopping and listing servers belongs to the process that owns the database. A
+/// session that arrived through a listener runs on one of the runtime's connections and is
+/// refused, whatever its credentials allow.
+fn require_host_connection(bind: &BindInfo) -> Result<(), Box<dyn Error>> {
+    let state = unsafe { &*bind.get_extra_info::<Arc<ExtensionState>>() };
+    if state.core.owns_connection(binding_connection_id(bind)?) {
+        return Err(HOST_ONLY.into());
+    }
+    Ok(())
+}
+
+const HOST_ONLY: &str = "DuckFlight server functions can only be called from the process that \
+     owns the database, not through a DuckFlight listener";
+
 #[derive(Clone)]
 struct ServeBindData {
     address: String,
@@ -171,6 +217,7 @@ macro_rules! define_serve {
             type BindData = ServeBindData;
 
             fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+                require_host_connection(bind)?;
                 bind.add_result_column("protocol", varchar());
                 bind.add_result_column("address", varchar());
                 Ok(ServeBindData {
@@ -228,6 +275,7 @@ impl VTab for StopServer {
     type BindData = StopBindData;
 
     fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+        require_host_connection(bind)?;
         bind.add_result_column("status", varchar());
         Ok(StopBindData {
             protocol: bind.get_parameter(0).to_string(),
@@ -280,6 +328,7 @@ impl VTab for ServerList {
     type BindData = EmptyBindData;
 
     fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+        require_host_connection(bind)?;
         bind.add_result_column("protocol", varchar());
         bind.add_result_column("address", varchar());
         Ok(EmptyBindData)

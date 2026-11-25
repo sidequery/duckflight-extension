@@ -360,6 +360,13 @@ impl CoreRuntime for DynamicCore {
         output.map_err(|message| DynamicCoreError(message).into())
     }
 
+    fn owns_connection(&self, connection_id: u64) -> bool {
+        match self.api().owns_connection {
+            Some(owns_connection) => unsafe { owns_connection(self.handle, connection_id) },
+            None => true,
+        }
+    }
+
     fn status(&self) -> CoreStatus {
         CoreStatus {
             loaded: true,

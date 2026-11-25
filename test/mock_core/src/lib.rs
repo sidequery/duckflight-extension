@@ -224,6 +224,11 @@ unsafe extern "C" fn list(
     }
 }
 
+unsafe extern "C" fn owns_connection(_: DuckflightCoreHandle, _: u64) -> bool {
+    // The mock opens no connections of its own.
+    false
+}
+
 static API_V1: DuckflightCoreApiV1 = DuckflightCoreApiV1 {
     struct_size: size_of::<DuckflightCoreApiV1>() as u32,
     abi_version: DUCKFLIGHT_CORE_ABI_V1,
@@ -232,6 +237,7 @@ static API_V1: DuckflightCoreApiV1 = DuckflightCoreApiV1 {
     start: Some(start),
     stop: Some(stop),
     list: Some(list),
+    owns_connection: Some(owns_connection),
 };
 
 #[unsafe(no_mangle)]

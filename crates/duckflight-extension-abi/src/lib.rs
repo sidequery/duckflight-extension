@@ -150,6 +150,11 @@ pub type DuckflightCoreListV1 = unsafe extern "C" fn(
     error: *mut DuckflightOutputBufferV1,
 ) -> DuckflightStatus;
 
+/// Whether the runtime runs statements on the DuckDB connection with this id: one of its pooled
+/// or listener-session connections. A handle the runtime does not recognize counts as owned.
+pub type DuckflightCoreOwnsConnectionV1 =
+    unsafe extern "C" fn(handle: DuckflightCoreHandle, connection_id: u64) -> bool;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct DuckflightCoreApiV1 {
@@ -160,6 +165,7 @@ pub struct DuckflightCoreApiV1 {
     pub start: Option<DuckflightCoreStartV1>,
     pub stop: Option<DuckflightCoreStopV1>,
     pub list: Option<DuckflightCoreListV1>,
+    pub owns_connection: Option<DuckflightCoreOwnsConnectionV1>,
 }
 
 pub type DuckflightCoreApiEntryV1 = unsafe extern "C" fn() -> *const DuckflightCoreApiV1;
