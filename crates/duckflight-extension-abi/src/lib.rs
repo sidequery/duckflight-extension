@@ -82,6 +82,15 @@ pub struct DuckflightCoreCreateOptionsV1 {
     pub reserved: u32,
 }
 
+/// Optional size-tagged suffix for a shim with linked ACL enforcement. Old
+/// cores consume only the unchanged v1 prefix. The callback remains valid for
+/// the lifetime of the host extension and takes a live duckdb_database.
+#[repr(C)]
+pub struct DuckflightCoreAclOptionsV1 {
+    pub base: DuckflightCoreCreateOptionsV1,
+    pub install_acl: unsafe extern "C" fn(*mut c_void) -> bool,
+}
+
 impl DuckflightCoreCreateOptionsV1 {
     pub fn new(
         extension_info: *mut c_void,

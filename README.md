@@ -742,6 +742,11 @@ An authorized release build embeds the private core directly into the extension:
 ./scripts/build-bundled.sh /path/to/private/duckflight
 ```
 
+With a unified Linux or macOS core bundle, the same extension supports ordinary
+listeners and SQL-managed permissions. On DuckDB 2.0.1, set `store` and
+`admins` in the listener configuration's `[acl]` section to enable enforcement.
+Earlier published core pins provide the capabilities of their respective release.
+
 See [docs/BUNDLED_CORE.md](docs/BUNDLED_CORE.md) for the local build and per-platform GitHub Release
 asset model. The current payloads and their checksums are pinned in `core-assets.lock`.
 

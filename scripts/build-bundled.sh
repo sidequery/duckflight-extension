@@ -163,6 +163,12 @@ if [[ "${target_triple}" == *apple-darwin ]]; then
   install_name_tool -id "@rpath/libduckflight_core_ffi.dylib" "${core_library}"
 fi
 
+bundle="${core_library}"
+if [[ "${platform}" == linux_* || "${platform}" == osx_* ]]; then
+  bundle="${core_output_dir}/duckflight-core-${platform}.tar.gz"
+  "${core_repo}/scripts/build-extension-core-bundle.sh" "${core_library}" "${platform}" "${core_target_dir}" "${bundle}"
+fi
+
 public_rustflags="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${user_home}=/build/home --remap-path-prefix=${public_repo}=/src/duckflight-extension"
 if [[ "${target_triple}" == *apple-darwin ]]; then
   public_rustflags="${public_rustflags} -C link-arg=-Wl,-install_name,@rpath/duckflight.duckdb_extension"
@@ -171,7 +177,7 @@ public_cflags="${CFLAGS:+${CFLAGS} }-ffile-prefix-map=${user_home}=/build/home -
 public_cxxflags="${CXXFLAGS:+${CXXFLAGS} }-ffile-prefix-map=${user_home}=/build/home -fdebug-prefix-map=${user_home}=/build/home -ffile-prefix-map=${public_repo}=/src/duckflight-extension -fdebug-prefix-map=${public_repo}=/src/duckflight-extension"
 
 RUSTFLAGS="${public_rustflags}" CFLAGS="${public_cflags}" CXXFLAGS="${public_cxxflags}" \
-  DUCKFLIGHT_CORE_BUNDLE_PATH="${core_library}" make \
+  DUCKFLIGHT_CORE_BUNDLE_PATH="${bundle}" make \
     "DUCKDB_PLATFORM=${platform}" "TARGET_INFO=--target ${target_triple}" \
     "TARGET_PATH=${CARGO_TARGET_DIR:-./target}/${target_triple}" release
 
