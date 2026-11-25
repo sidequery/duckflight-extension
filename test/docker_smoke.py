@@ -457,7 +457,9 @@ def run(image: str, startup_timeout: float) -> None:
                 except (flight.FlightUnavailableError, flight.FlightTimedOutError):
                     pass
                 else:
-                    raise AssertionError("Flight SQL listener started without an address")
+                    raise AssertionError(
+                        "Flight SQL listener started without an address"
+                    )
             stop(container)
             container = start("DUCKFLIGHT_PG_ADDRESS=", "DUCKFLIGHT_DATABASE=:memory:")
             ready(container)
