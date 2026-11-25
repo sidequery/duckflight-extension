@@ -83,6 +83,9 @@ unsafe fn load_bundle(bytes: &[u8]) -> Result<(Library, BundleFile), DynamicCore
 const ERROR_CAPACITY: usize = 4096;
 const API_HEADER_SIZE: usize =
     std::mem::offset_of!(DuckflightCoreApiV1, abi_version) + std::mem::size_of::<u32>();
+/// Every v1 runtime provides the entries before this one. Later entries were appended, and a
+/// runtime built before them reports a smaller table.
+const API_REQUIRED_SIZE: usize = std::mem::offset_of!(DuckflightCoreApiV1, owns_connection);
 
 #[derive(Debug)]
 struct DynamicCoreError(String);
@@ -95,9 +98,11 @@ impl fmt::Display for DynamicCoreError {
 
 impl Error for DynamicCoreError {}
 
-unsafe fn validate_api_table_header(
+/// Copy the runtime's API table, leaving entries it does not provide empty. The table is never
+/// read past the size the runtime reports.
+unsafe fn read_api_table(
     api: *const DuckflightCoreApiV1,
-) -> Result<(), DynamicCoreError> {
+) -> Result<DuckflightCoreApiV1, DynamicCoreError> {
     if api.is_null() {
         return Err(DynamicCoreError("runtime returned a null API table".into()));
     }
@@ -112,14 +117,20 @@ unsafe fn validate_api_table_header(
             "runtime ABI {abi_version} does not match extension ABI {DUCKFLIGHT_CORE_ABI_V1}"
         )));
     }
-    if struct_size < std::mem::size_of::<DuckflightCoreApiV1>() as u32 {
+    if struct_size < API_REQUIRED_SIZE as u32 {
         return Err(DynamicCoreError("runtime v1 API table is truncated".into()));
     }
-    Ok(())
+    let provided = (struct_size as usize).min(std::mem::size_of::<DuckflightCoreApiV1>());
+    // All-zero is a valid table: every entry after the header is an optional function pointer.
+    let mut table = std::mem::MaybeUninit::<DuckflightCoreApiV1>::zeroed();
+    unsafe {
+        ptr::copy_nonoverlapping(api.cast::<u8>(), table.as_mut_ptr().cast::<u8>(), provided);
+        Ok(table.assume_init())
+    }
 }
 
 pub(super) struct DynamicCore {
-    api: *const DuckflightCoreApiV1,
+    api: DuckflightCoreApiV1,
     handle: DuckflightCoreHandle,
     status_detail: &'static str,
     // The API table and handle remain valid only while the defining library is loaded.
@@ -203,8 +214,8 @@ impl DynamicCore {
         bundle_file: Option<BundleFile>,
         status_detail: &'static str,
     ) -> Result<Self, Box<dyn Error>> {
-        unsafe { validate_api_table_header(api)? };
-        let api_ref = unsafe { &*api };
+        let api = unsafe { read_api_table(api)? };
+        let api_ref = &api;
         let create = api_ref
             .create
             .ok_or_else(|| DynamicCoreError("runtime is missing create".into()))?;
@@ -257,7 +268,7 @@ impl DynamicCore {
     }
 
     fn api(&self) -> &DuckflightCoreApiV1 {
-        unsafe { &*self.api }
+        &self.api
     }
 }
 
@@ -363,7 +374,8 @@ impl CoreRuntime for DynamicCore {
     fn owns_connection(&self, connection_id: u64) -> bool {
         match self.api().owns_connection {
             Some(owns_connection) => unsafe { owns_connection(self.handle, connection_id) },
-            None => true,
+            // A runtime built before this entry cannot tell its connections apart.
+            None => false,
         }
     }
 
@@ -637,7 +649,33 @@ mod tests {
             abi_version: DUCKFLIGHT_CORE_ABI_V1,
         };
         let api = (&raw const header).cast::<DuckflightCoreApiV1>();
-        let error = unsafe { validate_api_table_header(api) }.unwrap_err();
+        let error = unsafe { read_api_table(api) }.err().unwrap();
         assert_eq!(error.to_string(), "runtime v1 API table is truncated");
+    }
+
+    #[test]
+    fn entries_a_smaller_runtime_table_lacks_are_empty() {
+        unsafe extern "C" fn owns(_: DuckflightCoreHandle, _: u64) -> bool {
+            true
+        }
+        let mut full: DuckflightCoreApiV1 = unsafe { std::mem::zeroed() };
+        full.struct_size = std::mem::size_of::<DuckflightCoreApiV1>() as u32;
+        full.abi_version = DUCKFLIGHT_CORE_ABI_V1;
+        full.owns_connection = Some(owns);
+        assert!(
+            unsafe { read_api_table(&raw const full) }
+                .unwrap()
+                .owns_connection
+                .is_some()
+        );
+
+        // An older runtime's table ends before the entry, whatever bytes follow it in memory.
+        full.struct_size = API_REQUIRED_SIZE as u32;
+        assert!(
+            unsafe { read_api_table(&raw const full) }
+                .unwrap()
+                .owns_connection
+                .is_none()
+        );
     }
 }
