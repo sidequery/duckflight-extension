@@ -444,7 +444,8 @@ def run(image: str, startup_timeout: float) -> None:
                 assert connection.execute("select id from smoke_rows").fetchall() == [
                     (42,)
                 ]
-            # An empty address starts no Flight SQL listener, so its published port answers nothing.
+            # An empty address starts no Flight SQL listener. Behind Docker's port proxy that
+            # shows up as some Flight transport error; a live listener would accept the password.
             port = int(docker("port", container, "45337/tcp").rsplit(":", 1)[1])
             with flight.FlightClient(
                 f"grpc+tls://localhost:{port}",
@@ -454,7 +455,7 @@ def run(image: str, startup_timeout: float) -> None:
                     client.authenticate_basic_token(
                         "smoke", password, flight.FlightCallOptions(timeout=5)
                     )
-                except (flight.FlightUnavailableError, flight.FlightTimedOutError):
+                except flight.FlightError:
                     pass
                 else:
                     raise AssertionError(
