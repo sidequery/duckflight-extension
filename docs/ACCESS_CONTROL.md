@@ -8,7 +8,8 @@ owner retains direct access to the database.
 
 This example uses the unified Linux or macOS extension build with stock DuckDB **2.0.1**,
 two password-authenticated users, and an in-memory table. The signed 2.0.0 packages
-predate built-in ACLs.
+predate built-in ACLs, and no 2.0.1 build is published yet; see the
+[compatibility table](INSTALL.md#which-build-you-get).
 
 **1. Configure the two logins and the role store.** From the extension checkout, create
 the credentials with the authentication helper. It prompts for each password.
