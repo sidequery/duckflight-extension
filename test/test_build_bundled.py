@@ -45,6 +45,13 @@ class BundledTargetTests(unittest.TestCase):
             'printf "verified fixture" > "$headers/duckdb.hpp"\n'
             'cd "$headers" && pwd -P\n'
         )
+        bundle_helper = self.core / "scripts/build-extension-core-bundle.sh"
+        bundle_helper.write_text(
+            "#!/bin/sh\nset -eu\n"
+            'test -d "$3"\n'
+            '{ printf "bundle:%s\\n" "$2"; cat "$1"; } > "$4"\n'
+        )
+        bundle_helper.chmod(0o755)
         self.tools = self.root / "bin"
         self.tools.mkdir()
         self.tool(
@@ -52,8 +59,7 @@ class BundledTargetTests(unittest.TestCase):
             '#!/bin/sh\ncase "$1" in -s) echo "$TEST_HOST_OS";; -m) echo "$TEST_HOST_ARCH";; esac\n',
         )
         self.tool("install_name_tool", "#!/bin/sh\nexit 0\n")
-        # Only the compiler is replaced. Real Make targets copy its output and
-        # the pinned CI helper appends actual DuckDB platform metadata.
+        # Make copies the synthetic extension and the real CI helper appends its metadata.
         compiler = (
             f"#!{sys.executable}\n"
             + """import os
@@ -120,7 +126,9 @@ output.write_bytes(data)
             self.public / "build/release/duckflight.duckdb_extension"
         ).read_bytes()
         self.assertTrue(
-            artifact.startswith(f"extension:{target}\ncore:{target}".encode())
+            artifact.startswith(
+                f"extension:{target}\nbundle:{platform}\ncore:{target}".encode()
+            )
         )
         # FIELD2 is followed by the 32-byte FIELD1 and 256-byte signature.
         self.assertEqual(artifact[-320:-288].rstrip(b"\0").decode(), platform)
