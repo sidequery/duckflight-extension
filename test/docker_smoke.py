@@ -444,9 +444,20 @@ def run(image: str, startup_timeout: float) -> None:
                 assert connection.execute("select id from smoke_rows").fetchall() == [
                     (42,)
                 ]
-                assert connection.execute(
-                    "select protocol from duckflight_servers()"
-                ).fetchall() == [("pgwire",)]
+            # An empty address starts no Flight SQL listener, so its published port answers nothing.
+            port = int(docker("port", container, "45337/tcp").rsplit(":", 1)[1])
+            with flight.FlightClient(
+                f"grpc+tls://localhost:{port}",
+                tls_root_certs=(fixtures / "server.crt").read_bytes(),
+            ) as client:
+                try:
+                    client.authenticate_basic_token(
+                        "smoke", password, flight.FlightCallOptions(timeout=5)
+                    )
+                except (flight.FlightUnavailableError, flight.FlightTimedOutError):
+                    pass
+                else:
+                    raise AssertionError("Flight SQL listener started without an address")
             stop(container)
             container = start("DUCKFLIGHT_PG_ADDRESS=", "DUCKFLIGHT_DATABASE=:memory:")
             ready(container)
