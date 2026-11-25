@@ -151,6 +151,101 @@ def check_writes(client: QuackClient, host) -> None:
     assert host.execute("select x from copied").fetchall() == [(1,)]
 
 
+# Rows that exist only on the client, so the insert has to stream them to the server.
+LOCAL_ROWS = (
+    "create temp table staged as select i::integer as id, 'city ' || i as city, "
+    "(i / 4)::decimal(10, 2) as amount, [i::varchar, 'tag'] as tags "
+    "from range({rows}) t(i)"
+)
+# Small batches sent with random delays reach the server out of order.
+MANY_BATCHES = (
+    "set quack_target_batch_bytes = 16384; set quack_debug_send_delay_ms = 20"
+)
+
+
+def check_local_rows(client: QuackClient, reader: QuackClient, host) -> None:
+    host.execute(
+        "create table loaded "
+        "(id integer, city varchar, amount decimal(10, 2), tags varchar[])"
+    )
+
+    def loaded() -> int:
+        return host.execute("select count(*) from loaded").fetchone()[0]
+
+    def out_of_order() -> int:
+        # Each load holds ids 0..n in order, so an id below its predecessor either
+        # starts the next load or is a row out of place.
+        return host.execute(
+            "select count(*) from (select id, lag(id) over (order by rowid) as previous "
+            "from loaded) where id < previous and id <> 0"
+        ).fetchone()[0]
+
+    staged = LOCAL_ROWS.format(rows=5000)
+    client.run(f"{staged}; insert into remote.main.loaded select * from staged")
+    assert loaded() == 5000, loaded()
+    sample = host.execute(
+        "select city, amount, tags from loaded where id = 4999"
+    ).fetchone()
+    assert sample[0] == "city 4999" and sample[2] == ["4999", "tag"], sample
+    assert str(sample[1]) == "1249.75", sample
+
+    client.run(
+        f"{staged}; insert into remote.main.loaded select * from staged where false"
+    )
+    assert loaded() == 5000, loaded()
+
+    client.run(
+        f"{staged}; {MANY_BATCHES}; insert into remote.main.loaded select * from staged"
+    )
+    assert loaded() == 10000, loaded()
+    assert out_of_order() == 0, out_of_order()
+
+    # A retried batch is applied once, and a lost batch fails the whole statement.
+    client.run(
+        f"{staged}; {MANY_BATCHES}; set quack_debug_duplicate_sends = 1; "
+        "insert into remote.main.loaded select * from staged"
+    )
+    assert loaded() == 15000, loaded()
+    client.rejects(
+        f"{staged}; {MANY_BATCHES}; set quack_debug_drop_batch = 2; "
+        "insert into remote.main.loaded select * from staged",
+        "batches",
+    )
+    assert loaded() == 15000, loaded()
+
+    client.run(
+        f"{staged}; begin; insert into remote.main.loaded select * from staged; rollback"
+    )
+    assert loaded() == 15000, loaded()
+    client.run(
+        f"{staged}; begin; insert into remote.main.loaded select * from staged; commit"
+    )
+    assert loaded() == 20000, loaded()
+    assert out_of_order() == 0, out_of_order()
+
+    client.run(f"{staged}; create table remote.main.from_local as select * from staged")
+    assert host.execute("select count(*), max(id) from from_local").fetchone() == (
+        5000,
+        4999,
+    )
+
+    # A failed stream leaves nothing behind and the attachment stays usable.
+    host.execute("create table keyed (id integer primary key)")
+    client.rejects(
+        "create temp table repeated as select 1 as id from range(10); "
+        "insert into remote.main.keyed select * from repeated",
+        "constraint violation",
+    )
+    assert host.execute("select count(*) from keyed").fetchone() == (0,)
+    client.run("insert into remote.main.keyed values (1)")
+    assert host.execute("select count(*) from keyed").fetchone() == (1,)
+
+    reader.rejects(
+        f"{staged}; insert into remote.main.loaded select * from staged", "read-only"
+    )
+    assert loaded() == 20000, loaded()
+
+
 def run(cli: Path, extension: Path | None, repository: str | None) -> None:
     with tempfile.TemporaryDirectory(prefix="duckflight-quack-client-") as directory:
         fixtures = Path(directory)
@@ -188,13 +283,16 @@ def run(cli: Path, extension: Path | None, repository: str | None) -> None:
             ).fetchone()[0]
             try:
                 # A read-only token must be enough to attach and query.
-                check_read_only(QuackClient(cli, address, read_token))
-                check_writes(QuackClient(cli, address, write_token), host)
+                reader = QuackClient(cli, address, read_token)
+                writer = QuackClient(cli, address, write_token)
+                check_read_only(reader)
+                check_writes(writer, host)
+                check_local_rows(writer, reader, host)
             finally:
                 host.execute("select * from duckflight_stop('quack', ?)", [address])
     print(
-        "PASS DuckDB quack client: read-only attach and queries, "
-        "inserts, updates, deletes and DDL through an attached catalog"
+        "PASS DuckDB quack client: read-only attach and queries, inserts, updates, "
+        "deletes and DDL through an attached catalog, and streamed local rows"
     )
 
 
