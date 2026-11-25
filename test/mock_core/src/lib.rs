@@ -1,7 +1,7 @@
 use duckflight_extension_abi::{
-    DUCKFLIGHT_CORE_ABI_V1, DuckflightBytesV1, DuckflightCoreApiV1, DuckflightCoreCreateOptionsV1,
-    DuckflightCoreHandle, DuckflightOutputBufferV1, DuckflightProtocol, DuckflightServerVisitorV1,
-    DuckflightStatus, DuckflightStringReceiverV1,
+    DUCKFLIGHT_CORE_ABI_V1, DuckflightBytesV1, DuckflightConfigSummaryV1, DuckflightCoreApiV1,
+    DuckflightCoreCreateOptionsV1, DuckflightCoreHandle, DuckflightOutputBufferV1,
+    DuckflightProtocol, DuckflightServerVisitorV1, DuckflightStatus, DuckflightStringReceiverV1,
 };
 use std::{
     ffi::c_void,
@@ -224,6 +224,89 @@ unsafe extern "C" fn list(
     }
 }
 
+// The mock keeps no files: it answers the setup calls with fixed values that echo its inputs.
+unsafe extern "C" fn config_check(
+    handle: DuckflightCoreHandle,
+    path: DuckflightBytesV1,
+    out_summary: *mut DuckflightConfigSummaryV1,
+    error: *mut DuckflightOutputBufferV1,
+) -> DuckflightStatus {
+    unsafe {
+        with_error_boundary(error, || {
+            handle_ref(handle)?;
+            let path = borrowed_str(path, "path")?;
+            if path.is_empty() {
+                return Err("a DuckFlight config file path is required".into());
+            }
+            if out_summary.is_null() {
+                return Err("config summary output is required".into());
+            }
+            *out_summary = DuckflightConfigSummaryV1 {
+                struct_size: size_of::<DuckflightConfigSummaryV1>() as u32,
+                tls: path.contains("tls"),
+                acl: false,
+                users: 2,
+                tokens: 1,
+                oidc_providers: 0,
+            };
+            Ok(DuckflightStatus::OK)
+        })
+    }
+}
+
+unsafe extern "C" fn token_create(
+    handle: DuckflightCoreHandle,
+    path: DuckflightBytesV1,
+    name: DuckflightBytesV1,
+    scopes: DuckflightBytesV1,
+    token_receiver: Option<DuckflightStringReceiverV1>,
+    token_context: *mut c_void,
+    error: *mut DuckflightOutputBufferV1,
+) -> DuckflightStatus {
+    unsafe {
+        with_error_boundary(error, || {
+            handle_ref(handle)?;
+            borrowed_str(path, "path")?;
+            let receiver = token_receiver.ok_or("token receiver is required")?;
+            let token = format!(
+                "mock-token:{}:{}",
+                borrowed_str(name, "name")?,
+                borrowed_str(scopes, "scopes")?
+            );
+            Ok(receiver(
+                token_context,
+                DuckflightBytesV1::from_utf8(&token),
+            ))
+        })
+    }
+}
+
+unsafe extern "C" fn user_create(
+    handle: DuckflightCoreHandle,
+    path: DuckflightBytesV1,
+    name: DuckflightBytesV1,
+    password_file: DuckflightBytesV1,
+    password_receiver: Option<DuckflightStringReceiverV1>,
+    password_context: *mut c_void,
+    error: *mut DuckflightOutputBufferV1,
+) -> DuckflightStatus {
+    unsafe {
+        with_error_boundary(error, || {
+            handle_ref(handle)?;
+            borrowed_str(path, "path")?;
+            if !borrowed_str(password_file, "password_file")?.is_empty() {
+                return Ok(DuckflightStatus::OK);
+            }
+            let receiver = password_receiver.ok_or("password receiver is required")?;
+            let password = format!("mock-password:{}", borrowed_str(name, "name")?);
+            Ok(receiver(
+                password_context,
+                DuckflightBytesV1::from_utf8(&password),
+            ))
+        })
+    }
+}
+
 unsafe extern "C" fn owns_connection(_: DuckflightCoreHandle, _: u64) -> bool {
     // The mock opens no connections of its own.
     false
@@ -238,6 +321,9 @@ static API_V1: DuckflightCoreApiV1 = DuckflightCoreApiV1 {
     stop: Some(stop),
     list: Some(list),
     owns_connection: Some(owns_connection),
+    config_check: Some(config_check),
+    token_create: Some(token_create),
+    user_create: Some(user_create),
 };
 
 #[unsafe(no_mangle)]

@@ -49,6 +49,15 @@ struct CoreStatus {
     detail: String,
 }
 
+/// What a config file defines, without any of its secrets.
+struct ConfigSummary {
+    users: u64,
+    tokens: u64,
+    oidc_providers: u64,
+    tls: bool,
+    acl: bool,
+}
+
 trait CoreRuntime: Send + Sync {
     fn start(
         &self,
@@ -60,6 +69,20 @@ trait CoreRuntime: Send + Sync {
     fn stop(&self, protocol: Protocol, address: &str) -> Result<bool, Box<dyn Error>>;
 
     fn snapshots(&self) -> Result<Vec<(String, String)>, Box<dyn Error>>;
+
+    /// Validate a config file as a listener would when it starts.
+    fn check_config(&self, path: &str) -> Result<ConfigSummary, Box<dyn Error>>;
+
+    /// Add a bearer token and return it. `scopes` is comma-separated; empty means the defaults.
+    fn create_token(&self, path: &str, name: &str, scopes: &str) -> Result<String, Box<dyn Error>>;
+
+    /// Add a user. An empty `password_file` generates a password and returns it.
+    fn create_user(
+        &self,
+        path: &str,
+        name: &str,
+        password_file: &str,
+    ) -> Result<Option<String>, Box<dyn Error>>;
 
     /// Whether the runtime runs statements on this DuckDB connection, as it does for its
     /// listeners' sessions. When in doubt the answer is yes.
@@ -95,6 +118,18 @@ impl CoreRuntime for UnavailableCore {
 
     fn snapshots(&self) -> Result<Vec<(String, String)>, Box<dyn Error>> {
         Ok(Vec::new())
+    }
+
+    fn check_config(&self, _: &str) -> Result<ConfigSummary, Box<dyn Error>> {
+        Err(self.unavailable())
+    }
+
+    fn create_token(&self, _: &str, _: &str, _: &str) -> Result<String, Box<dyn Error>> {
+        Err(self.unavailable())
+    }
+
+    fn create_user(&self, _: &str, _: &str, _: &str) -> Result<Option<String>, Box<dyn Error>> {
+        Err(self.unavailable())
     }
 
     fn owns_connection(&self, _: u64) -> bool {
@@ -188,7 +223,8 @@ fn binding_connection_id(bind: &BindInfo) -> Result<u64, Box<dyn Error>> {
     }
 }
 
-/// Starting, stopping and listing servers belongs to the process that owns the database. A
+/// Starting, stopping and listing servers, and editing credentials, belongs to the process that
+/// owns the database. A
 /// session that arrived through a listener runs on one of the runtime's connections and is
 /// refused, whatever its credentials allow.
 fn require_host_connection(bind: &BindInfo) -> Result<(), Box<dyn Error>> {
@@ -199,7 +235,7 @@ fn require_host_connection(bind: &BindInfo) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-const HOST_ONLY: &str = "DuckFlight server functions can only be called from the process that \
+const HOST_ONLY: &str = "DuckFlight server and setup functions can only be called from the process that \
      owns the database, not through a DuckFlight listener";
 
 #[derive(Clone)]
@@ -366,6 +402,183 @@ impl VTab for ServerList {
     }
 }
 
+/// A named varchar argument, or the empty string when it was not given.
+fn optional_argument(bind: &BindInfo, name: &str) -> String {
+    bind.get_named_parameter(name)
+        .filter(|value| !value.is_null())
+        .map(|value| value.to_string())
+        .unwrap_or_default()
+}
+
+#[derive(Clone)]
+struct ConfigPathBindData {
+    path: String,
+}
+
+struct ConfigCheck;
+
+impl VTab for ConfigCheck {
+    type InitData = EmitOnce;
+    type BindData = ConfigPathBindData;
+
+    fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+        require_host_connection(bind)?;
+        for name in ["users", "tokens", "oidc_providers"] {
+            bind.add_result_column(name, logical_type(LogicalTypeId::UBigint));
+        }
+        for name in ["tls", "acl"] {
+            bind.add_result_column(name, logical_type(LogicalTypeId::Boolean));
+        }
+        Ok(ConfigPathBindData {
+            path: bind.get_parameter(0).to_string(),
+        })
+    }
+
+    fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
+        Ok(EmitOnce::new())
+    }
+
+    fn func(
+        info: &TableFunctionInfo<Self>,
+        output: &mut DataChunkHandle,
+    ) -> Result<(), Box<dyn Error>> {
+        if info.get_init_data().done.swap(true, Ordering::Relaxed) {
+            output.set_len(0);
+            return Ok(());
+        }
+        let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
+        let summary = state.core.check_config(&info.get_bind_data().path)?;
+        let counts = [summary.users, summary.tokens, summary.oidc_providers];
+        for (column, count) in counts.into_iter().enumerate() {
+            unsafe { output.flat_vector(column).as_mut_slice::<u64>()[0] = count };
+        }
+        for (column, flag) in [summary.tls, summary.acl].into_iter().enumerate() {
+            unsafe {
+                output
+                    .flat_vector(counts.len() + column)
+                    .as_mut_slice::<bool>()[0] = flag
+            };
+        }
+        output.set_len(1);
+        Ok(())
+    }
+
+    fn parameters() -> Option<Vec<LogicalTypeHandle>> {
+        Some(vec![varchar()])
+    }
+}
+
+/// A credential to add to a config file. The secret is not an argument: the runtime generates
+/// it and the function returns it once, so it never appears in a statement's text.
+#[derive(Clone)]
+struct CredentialBindData {
+    path: String,
+    name: String,
+    option: String,
+}
+
+struct TokenCreate;
+
+impl VTab for TokenCreate {
+    type InitData = EmitOnce;
+    type BindData = CredentialBindData;
+
+    fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+        require_host_connection(bind)?;
+        bind.add_result_column("name", varchar());
+        bind.add_result_column("token", varchar());
+        Ok(CredentialBindData {
+            path: bind.get_parameter(0).to_string(),
+            name: bind.get_parameter(1).to_string(),
+            option: optional_argument(bind, "scopes"),
+        })
+    }
+
+    fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
+        Ok(EmitOnce::new())
+    }
+
+    fn func(
+        info: &TableFunctionInfo<Self>,
+        output: &mut DataChunkHandle,
+    ) -> Result<(), Box<dyn Error>> {
+        if info.get_init_data().done.swap(true, Ordering::Relaxed) {
+            output.set_len(0);
+            return Ok(());
+        }
+        let bind = info.get_bind_data();
+        let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
+        let token = state
+            .core
+            .create_token(&bind.path, &bind.name, &bind.option)?;
+        set_string(output, 0, 0, &bind.name)?;
+        set_string(output, 1, 0, &token)?;
+        output.set_len(1);
+        Ok(())
+    }
+
+    fn parameters() -> Option<Vec<LogicalTypeHandle>> {
+        Some(vec![varchar(), varchar()])
+    }
+
+    fn named_parameters() -> Option<Vec<(String, LogicalTypeHandle)>> {
+        Some(vec![("scopes".to_string(), varchar())])
+    }
+}
+
+struct UserCreate;
+
+impl VTab for UserCreate {
+    type InitData = EmitOnce;
+    type BindData = CredentialBindData;
+
+    fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+        require_host_connection(bind)?;
+        bind.add_result_column("name", varchar());
+        bind.add_result_column("password", varchar());
+        Ok(CredentialBindData {
+            path: bind.get_parameter(0).to_string(),
+            name: bind.get_parameter(1).to_string(),
+            option: optional_argument(bind, "password_file"),
+        })
+    }
+
+    fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
+        Ok(EmitOnce::new())
+    }
+
+    fn func(
+        info: &TableFunctionInfo<Self>,
+        output: &mut DataChunkHandle,
+    ) -> Result<(), Box<dyn Error>> {
+        if info.get_init_data().done.swap(true, Ordering::Relaxed) {
+            output.set_len(0);
+            return Ok(());
+        }
+        let bind = info.get_bind_data();
+        let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
+        let password = state
+            .core
+            .create_user(&bind.path, &bind.name, &bind.option)?;
+        set_string(output, 0, 0, &bind.name)?;
+        match password {
+            Some(password) => set_string(output, 1, 0, &password)?,
+            // The password came from a file the caller already has.
+            None => output.flat_vector(1).set_null(0),
+        }
+        output.set_len(1);
+        Ok(())
+    }
+
+    fn parameters() -> Option<Vec<LogicalTypeHandle>> {
+        Some(vec![varchar(), varchar()])
+    }
+
+    fn named_parameters() -> Option<Vec<(String, LogicalTypeHandle)>> {
+        Some(vec![("password_file".to_string(), varchar())])
+    }
+}
+
 struct CoreStatusTable;
 
 impl VTab for CoreStatusTable {
@@ -423,6 +636,18 @@ fn register_extension(
         .register_table_function_with_extra_info::<StopServer, _>("duckflight_stop", &state)?;
     connection
         .register_table_function_with_extra_info::<ServerList, _>("duckflight_servers", &state)?;
+    connection.register_table_function_with_extra_info::<ConfigCheck, _>(
+        "duckflight_config_check",
+        &state,
+    )?;
+    connection.register_table_function_with_extra_info::<TokenCreate, _>(
+        "duckflight_token_create",
+        &state,
+    )?;
+    connection.register_table_function_with_extra_info::<UserCreate, _>(
+        "duckflight_user_create",
+        &state,
+    )?;
     connection.register_table_function_with_extra_info::<CoreStatusTable, _>(
         "duckflight_core_status",
         &state,

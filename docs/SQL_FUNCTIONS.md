@@ -1,8 +1,9 @@
 # SQL reference
 
-Loading DuckFlight adds three groups of SQL objects to the host database:
+Loading DuckFlight adds four groups of SQL objects to the host database:
 
 - [Server functions](#server-functions) that start, list and stop listeners.
+- [Setup functions](#setup-functions) that create credentials in `duckflight.toml`.
 - [PostgreSQL compatibility helpers](#postgresql-compatibility-helpers) so PostgreSQL-flavoured
   queries and client tools work.
 - [Session diagnostics](#session-diagnostics) that describe connected PostgreSQL clients.
@@ -12,9 +13,9 @@ Loading DuckFlight adds three groups of SQL objects to the host database:
 Run these in the DuckDB process that loaded the extension. Every listener serves that process's
 database, including an in-memory one, for as long as the process stays running.
 
-Starting, stopping and listing listeners is reserved for that process. A client connected through
-a listener gets an error from these functions whatever its credentials allow;
-`duckflight_core_status()` stays available to it.
+Starting, stopping and listing listeners is reserved for that process, and so are the
+[setup functions](#setup-functions). A client connected through a listener gets an error from
+these functions whatever its credentials allow; `duckflight_core_status()` stays available to it.
 
 ```sql doctest=host
 load duckflight;
@@ -72,6 +73,44 @@ the Flight SQL listener; there is no separate `adbc` protocol or `duckflight_adb
 
 How long a stopping listener waits for running queries is set by
 [`shutdown_grace_secs`](CONFIGURATION.md#top-level). Closing DuckDB stops every listener.
+
+## Setup functions
+
+These create credentials in [`duckflight.toml`](CONFIGURATION.md#duckflighttoml) from the DuckDB
+process that will serve it, with nothing else to install.
+
+```sql
+select * from duckflight_token_create('duckflight.toml', 'airport');
+select * from duckflight_token_create('duckflight.toml', 'loader',
+                                      scopes := 'query:execute,query:mutate,transaction:manage');
+select * from duckflight_user_create('duckflight.toml', 'alice');
+select * from duckflight_user_create('duckflight.toml', 'bob', password_file := 'bob.password');
+select * from duckflight_config_check('duckflight.toml');
+```
+
+| Function | Arguments | Returned columns |
+| --- | --- | --- |
+| `duckflight_token_create(config_file, name)` | Two varchar values; optional `scopes` (comma-separated varchar) | `name`, `token` (varchar) |
+| `duckflight_user_create(config_file, name)` | Two varchar values; optional `password_file` (varchar) | `name`, `password` (varchar, null with `password_file`) |
+| `duckflight_config_check(config_file)` | One varchar value | `users`, `tokens`, `oidc_providers` (unsigned bigint), `tls`, `acl` (boolean) |
+
+A secret is never an argument. DuckFlight generates the token or password and returns it once, so
+it does not appear in the statement or in your DuckDB history; the file stores only a SHA-256
+digest or a salted password verifier. Copy the returned value straight into the client's secret
+manager. To choose a password yourself, put it in a file readable only by you and pass
+`password_file`; nothing is returned then.
+
+Without `scopes` a token gets `query:execute` and `transaction:manage`. See
+[Authorization scopes](AUTHENTICATION.md#authorization-scopes) for the full list.
+
+The functions create the file when it does not exist and otherwise append to it, leaving
+everything already there, comments included, unchanged. The result is validated before it replaces
+the file, which is written with mode `0600`. A name that already exists is an error: remove its
+table from the file to replace it. A running listener keeps the credentials it started with, so
+stop and start it to pick up a new one.
+
+`duckflight_config_check` validates a file the way a listener does when it starts and reports what
+it defines.
 
 ### Status
 

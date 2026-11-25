@@ -39,6 +39,12 @@ This page explains how to set each method up. For a table of every key, see the
 Methods can be combined in one file. HTTP and Quack do not accept users and passwords, so a
 config containing only `[users.*]` is not enough for those two listeners.
 
+## Creating credentials
+
+The [setup functions](SQL_FUNCTIONS.md#setup-functions) create users and tokens from SQL in the
+DuckDB process itself, and return each generated secret once. The helper below does the same from
+a shell, and also rotates and removes entries.
+
 ## The helper
 
 `duckflight_auth.py` creates and validates the file. It has no dependencies beyond Python 3.11,

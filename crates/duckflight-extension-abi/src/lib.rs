@@ -155,6 +155,50 @@ pub type DuckflightCoreListV1 = unsafe extern "C" fn(
 pub type DuckflightCoreOwnsConnectionV1 =
     unsafe extern "C" fn(handle: DuckflightCoreHandle, connection_id: u64) -> bool;
 
+/// What a config file defines, without any of its secrets. `struct_size` is set by the caller.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DuckflightConfigSummaryV1 {
+    pub struct_size: u32,
+    pub tls: bool,
+    pub acl: bool,
+    pub users: u64,
+    pub tokens: u64,
+    pub oidc_providers: u64,
+}
+
+/// Validates the config file at `path` as a listener would when it starts.
+pub type DuckflightCoreConfigCheckV1 = unsafe extern "C" fn(
+    handle: DuckflightCoreHandle,
+    path: DuckflightBytesV1,
+    out_summary: *mut DuckflightConfigSummaryV1,
+    error: *mut DuckflightOutputBufferV1,
+) -> DuckflightStatus;
+
+/// Adds a bearer token to the config file at `path` and passes the token to `token_receiver`.
+/// `scopes` is comma-separated; empty selects the default scopes.
+pub type DuckflightCoreTokenCreateV1 = unsafe extern "C" fn(
+    handle: DuckflightCoreHandle,
+    path: DuckflightBytesV1,
+    name: DuckflightBytesV1,
+    scopes: DuckflightBytesV1,
+    token_receiver: Option<DuckflightStringReceiverV1>,
+    token_context: *mut c_void,
+    error: *mut DuckflightOutputBufferV1,
+) -> DuckflightStatus;
+
+/// Adds a user to the config file at `path`. With an empty `password_file` a password is
+/// generated and passed to `password_receiver`; otherwise the receiver is not called.
+pub type DuckflightCoreUserCreateV1 = unsafe extern "C" fn(
+    handle: DuckflightCoreHandle,
+    path: DuckflightBytesV1,
+    name: DuckflightBytesV1,
+    password_file: DuckflightBytesV1,
+    password_receiver: Option<DuckflightStringReceiverV1>,
+    password_context: *mut c_void,
+    error: *mut DuckflightOutputBufferV1,
+) -> DuckflightStatus;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct DuckflightCoreApiV1 {
@@ -166,6 +210,9 @@ pub struct DuckflightCoreApiV1 {
     pub stop: Option<DuckflightCoreStopV1>,
     pub list: Option<DuckflightCoreListV1>,
     pub owns_connection: Option<DuckflightCoreOwnsConnectionV1>,
+    pub config_check: Option<DuckflightCoreConfigCheckV1>,
+    pub token_create: Option<DuckflightCoreTokenCreateV1>,
+    pub user_create: Option<DuckflightCoreUserCreateV1>,
 }
 
 pub type DuckflightCoreApiEntryV1 = unsafe extern "C" fn() -> *const DuckflightCoreApiV1;

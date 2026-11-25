@@ -86,3 +86,37 @@ no quack server on 127.0.0.1:18081
 query TT
 select * from duckflight_servers();
 ----
+
+query IIIII
+select users, tokens, oidc_providers, tls, acl from duckflight_config_check('with-tls.toml');
+----
+2	1	0	true	false
+
+statement error
+select * from duckflight_config_check('');
+----
+config file path is required
+
+query TT
+select * from duckflight_token_create('duckflight.toml', 'ci');
+----
+ci	mock-token:ci:
+
+query TT
+select * from duckflight_token_create('duckflight.toml', 'loader', scopes := 'query:execute,query:mutate');
+----
+loader	mock-token:loader:query:execute,query:mutate
+
+query TT
+select * from duckflight_user_create('duckflight.toml', 'alice');
+----
+alice	mock-password:alice
+
+query TT
+select * from duckflight_user_create('duckflight.toml', 'bob', password_file := 'bob.password');
+----
+bob	NULL
+
+# Planning a setup function creates nothing: the work happens when the function runs.
+statement ok
+explain select * from duckflight_token_create('duckflight.toml', 'planned');
