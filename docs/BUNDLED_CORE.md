@@ -90,9 +90,11 @@ uv run test/release/oidc_health.py build/release/duckflight.duckdb_extension \
   --duckdb-cli /path/to/duckdb
 ```
 
-The smoke runner checks the CLI's source ID. The session suite's CLI option also
-avoids depending on a Python wheel matching the release candidate. These commands
-test the bundled production runtime; `make test_debug` uses the open mock core.
+Use `DUCKDB_TEST_CLI` with each target DuckDB release to check the same bundle
+before publishing it. Release CI passes `--expected-source-id` to verify the
+source ID of its reference CLI. The session suite's CLI option also avoids
+depending on a Python wheel matching the release candidate. These commands test
+the bundled production runtime; `make test_debug` uses the open mock core.
 
 On Linux, run the same suite with `TMPDIR` on a `noexec` mount and pass
 `--require-noexec-tmp` to verify both the mount flags and bundled listener behavior.

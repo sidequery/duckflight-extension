@@ -87,7 +87,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv run --python 3.12 test/release/cli_smoke.py build/release-host/duckdb dist/duckflight.duckdb_extension
+          uv run --python 3.12 test/release/cli_smoke.py build/release-host/duckdb dist/duckflight.duckdb_extension \
+            --expected-source-id d54cbbe3df
           uv run --python 3.12 test/release/pgwire_attached_database.py build/release-host/duckdb dist/duckflight.duckdb_extension
           uv run --python 3.12 test/release/pgwire_cross_catalog.py build/release-host/duckdb dist/duckflight.duckdb_extension
           uv run --python 3.12 test/release/http_quack_smoke.py build/release-host/duckdb dist/duckflight.duckdb_extension

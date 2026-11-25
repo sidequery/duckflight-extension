@@ -488,7 +488,7 @@ Generated tokens grant `query:execute` and `transaction:manage` by default. Airp
 a Flight SQL transaction even for reads, so both scopes are required for their least-privilege read
 path. This still denies query mutation, ingestion, and administrative SQL. Grant additional
 permissions with repeated `--scope`, or use the explicit `--full-access` switch when the client
-genuinely needs the complete set.
+genuinely needs the complete set. See [Authorization scopes](#authorization-scopes) for the values.
 
 ### Configuration schema
 
@@ -519,6 +519,25 @@ negotiate independently over their respective ports.
 
 The angle-bracket values above describe the schema and are not usable credentials. Quote names that
 are not valid bare TOML keys.
+
+#### Authorization scopes
+
+Use these case-sensitive values in `[tokens.<name>]`, `[tls.identities.<fingerprint>]`,
+and `[[authorization.rules]]` for OIDC.
+
+| Scope | Permission |
+| --- | --- |
+| `query:execute` | Run read-only SQL such as `SELECT` and access query metadata. |
+| `query:mutate` | Run SQL that changes data or schema, such as `INSERT`, `UPDATE`, and `CREATE TABLE`. |
+| `query:ingest` | Use the HTTP Arrow IPC and Flight SQL bulk ingestion APIs. |
+| `transaction:manage` | Begin, commit, and roll back transactions through the HTTP and Flight SQL transaction APIs. |
+| `query:admin` | Run extension-management SQL such as `INSTALL` and `LOAD` where the listener permits it. HTTP and PgWire reject these commands regardless of scope. |
+
+List each permission the client needs. For example, a client that reads and
+writes over Flight SQL should include both `query:execute` and `query:mutate`.
+When `scopes` is omitted from a static token or mTLS identity, it defaults to
+`["query:execute", "transaction:manage"]`. OIDC identities receive the scopes
+from all matching rules and start with an empty grant.
 
 #### Users
 
@@ -581,8 +600,8 @@ scopes = ["query:execute", "transaction:manage"]
 Every rule must name a configured `oidc:<name>`. Optional `subject`, `group`, and
 `tenant` selectors must all match. Matching rules add their scopes; an identity with no
 matching rule receives no local query privileges. Provider `scope` and `roles` claims do
-not directly grant DuckFlight privileges. Supported local scopes are `query:execute`,
-`query:mutate`, `query:ingest`, `query:admin`, and `transaction:manage`.
+not directly grant DuckFlight privileges. See [Authorization scopes](#authorization-scopes)
+for the local values.
 
 Flight clients send the provider's access token in `authorization: Bearer <token>` on
 each RPC. PgWire clients supporting SASL OAUTHBEARER can use the same providers.
