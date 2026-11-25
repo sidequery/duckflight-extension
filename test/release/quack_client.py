@@ -45,17 +45,21 @@ class QuackClient:
             f"(type quack, token '{token}', disable_ssl true);\n"
         )
 
-    def run(self, sql: str) -> list[dict]:
-        """Run `sql` after attaching and return the rows of its last statement."""
-        result = subprocess.run(
+    def session(self, sql: str, bail: bool) -> subprocess.CompletedProcess[str]:
+        """Run `sql` in one CLI session after attaching."""
+        return subprocess.run(
             [str(self.cli), "-no-init", "-batch", ":memory:"],
-            input=f".bail on\n{self.attach}.mode json\n{sql};\n",
+            input=f"{'.bail on' if bail else ''}\n{self.attach}.mode json\n{sql};\n",
             check=False,
             env=CLIENT_ENVIRONMENT,
             capture_output=True,
             text=True,
             timeout=120,
         )
+
+    def run(self, sql: str) -> list[dict]:
+        """Run `sql` after attaching and return the rows of its last statement."""
+        result = self.session(sql, bail=True)
         if result.returncode != 0:
             raise ClientError(result.stderr.strip() or result.stdout.strip())
         output = result.stdout.strip()
@@ -229,6 +233,32 @@ def check_local_rows(client: QuackClient, reader: QuackClient, host) -> None:
         4999,
     )
 
+    # Constant, null and row-id columns leave the client as compressed vectors.
+    host.execute(
+        "create table shapes (id bigint, label varchar, price decimal(10, 2), "
+        "seen timestamp, flag boolean, tags bigint[])"
+    )
+    client.run(
+        f"{staged}; insert into remote.main.shapes select rowid, 'fixed', "
+        "9.99::decimal(10, 2), timestamp '2026-01-02 03:04:05', true, [id, 1] from staged; "
+        "insert into remote.main.shapes select id, null, null, null, null, null from staged"
+    )
+    shapes = host.execute(
+        "select count(*), count(label), sum(id)::bigint, count(distinct label), "
+        "min(price)::varchar, max(seen)::varchar, bool_and(flag), sum(tags[1])::bigint "
+        "from shapes"
+    ).fetchone()
+    assert shapes == (
+        10000,
+        5000,
+        24995000,
+        1,
+        "9.99",
+        "2026-01-02 03:04:05",
+        True,
+        12497500,
+    ), shapes
+
     # A failed stream leaves nothing behind and the attachment stays usable.
     host.execute("create table keyed (id integer primary key)")
     client.rejects(
@@ -239,6 +269,20 @@ def check_local_rows(client: QuackClient, reader: QuackClient, host) -> None:
     assert host.execute("select count(*) from keyed").fetchone() == (0,)
     client.run("insert into remote.main.keyed values (1)")
     assert host.execute("select count(*) from keyed").fetchone() == (1,)
+
+    # Inside the client's transaction the failure leaves the rollback to the client,
+    # and the same session carries on afterwards.
+    session = client.session(
+        # One statement per line: the CLI drops the rest of a line after an error.
+        "create temp table repeated as select 3 as id from range(10);\nbegin;\n"
+        "insert into remote.main.keyed select * from repeated;\nrollback;\n"
+        "insert into remote.main.keyed values (2)",
+        bail=False,
+    )
+    assert "constraint violation" in session.stderr, session.stderr
+    assert "transaction" not in session.stderr.lower(), session.stderr
+    keyed = host.execute("select list(id order by id) from keyed").fetchone()[0]
+    assert keyed == [1, 2], (keyed, session.stdout, session.stderr)
 
     reader.rejects(
         f"{staged}; insert into remote.main.loaded select * from staged", "read-only"
