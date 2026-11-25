@@ -10,7 +10,7 @@ ABI v1 uses only fixed-layout C representations:
 - numeric status and protocol values;
 - borrowed pointer-and-length UTF-8 values;
 - caller-owned output buffers;
-- callbacks that are valid only for the duration of a call;
+- per-call callbacks and an optional host-lifetime ACL installer;
 - an opaque runtime handle created and destroyed by the provider;
 - DuckDB extension-info and access pointers borrowed only during `create`.
 
@@ -22,6 +22,13 @@ The extension checks the API version, structure size, complete callback table, c
 non-null handle before accepting a provider. Runtime failures use a caller-owned diagnostic buffer.
 The canonical declarations live in `crates/duckflight-extension-abi/src/lib.rs`.
 
-Adding fields to v1 is not supported because a current consumer requires the complete v1 structure.
+The v1 function table and the original create-options prefix have fixed layouts.
+A shim with built-in ACLs passes `DuckflightCoreAclOptionsV1` to `create`. Its
+first field is the original options structure, with `struct_size` set to the
+size of the enclosing structure. Older providers read the prefix. New providers
+read the installer pointer only when the size covers it. The installer takes a
+live host database handle and remains callable for the host extension's lifetime.
+The core checks the exact host version before calling it.
+
 An incompatible change must introduce a new symbol such as `duckflight_core_api_v2` and retain v1 as
 long as released extensions depend on it.

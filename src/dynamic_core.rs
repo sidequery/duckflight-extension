@@ -223,7 +223,25 @@ impl DynamicCore {
         );
         let mut handle = ptr::null_mut();
         let mut error = ErrorBuffer::new();
-        let status = unsafe { create(&options, &mut handle, error.as_ffi()) };
+        #[cfg(duckflight_linked_acl)]
+        let options = {
+            use duckflight_extension_abi::DuckflightCoreAclOptionsV1;
+            unsafe extern "C" {
+                fn duckflight_install_acl(database: *mut c_void) -> bool;
+            }
+            DuckflightCoreAclOptionsV1 {
+                base: DuckflightCoreCreateOptionsV1 {
+                    struct_size: std::mem::size_of::<DuckflightCoreAclOptionsV1>() as u32,
+                    ..options
+                },
+                install_acl: duckflight_install_acl,
+            }
+        };
+        #[cfg(duckflight_linked_acl)]
+        let options = std::ptr::from_ref(&options).cast::<DuckflightCoreCreateOptionsV1>();
+        #[cfg(not(duckflight_linked_acl))]
+        let options = &options;
+        let status = unsafe { create(options, &mut handle, error.as_ffi()) };
         check_status(status, &error)?;
         if handle.is_null() {
             return Err(DynamicCoreError("runtime created a null handle".into()).into());

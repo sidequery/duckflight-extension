@@ -5,7 +5,10 @@ DuckFlight core; users do not install or download a sidecar library.
 
 The public repository can build without the private core for source review, formatting, linting,
 function discovery, and mock lifecycle tests. A release-producing build supplies a platform core
-library through `DUCKFLIGHT_CORE_BUNDLE_PATH`. `build.rs` embeds those bytes in the extension. At
+asset through `DUCKFLIGHT_CORE_BUNDLE_PATH`. For a unified Linux or macOS
+`.tar.gz` bundle, `build.rs` embeds the core library and statically links its
+native ACL object and matching DuckDB archives. Earlier raw-library assets are
+still supported. At
 `LOAD`, Linux loads the core from a sealed executable memory file through `/proc/self/fd`, so
 temporary storage mounted `noexec` is supported. Linux requires `memfd_create` and accessible
 `/proc/self/fd`; policies forbidding executable memory files produce a diagnostic in
