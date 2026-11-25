@@ -10,6 +10,7 @@ no data to export or copy.
 - [Kubernetes](#kubernetes)
 - [SQL API](#sql-api)
 - [Authentication setup](#authentication-setup)
+- [SQL access controls](#sql-access-controls)
 - [Observability](#observability)
 - [Build and test](#build-and-test)
 - [Security](#security)
@@ -686,6 +687,19 @@ host that accepts untrusted SQL, isolate each tenant in a separate DuckDB proces
 the extension is installed or loaded. Listener authentication is not a substitute for process
 isolation or SQL authorization inside the host DuckDB process.
 
+## SQL access controls
+
+Give an analyst access to selected columns, show support staff a masked account number,
+or restrict each tenant to its own rows. Administrators manage these permissions with SQL
+over a PgWire or Flight SQL connection. Roles and grants persist in a private DuckDB file.
+
+Built-in enforcement requires DuckDB **2.0.1** and the unified DuckFlight extension build.
+The signed 2.0.0 builds listed above predate this feature. To enable it, add an `[acl]`
+section to the listener's authentication file and identify the initial administrator.
+
+Follow the [access control guide](docs/ACCESS_CONTROL.md) to start a managed listener,
+grant a reader access, check what they see, and revoke the grant from their live session.
+
 ## Observability
 
 The extension supports optional OTLP traces, metrics, query-completion logs, and sampled
@@ -741,11 +755,6 @@ An authorized release build embeds the private core directly into the extension:
 ```sh
 ./scripts/build-bundled.sh /path/to/private/duckflight
 ```
-
-With a unified Linux or macOS core bundle, the same extension supports ordinary
-listeners and SQL-managed permissions. On DuckDB 2.0.1, set `store` and
-`admins` in the listener configuration's `[acl]` section to enable enforcement.
-Earlier published core pins provide the capabilities of their respective release.
 
 See [docs/BUNDLED_CORE.md](docs/BUNDLED_CORE.md) for the local build and per-platform GitHub Release
 asset model. The current payloads and their checksums are pinned in `core-assets.lock`.
