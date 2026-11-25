@@ -406,6 +406,8 @@ def validate_config(data: Any) -> dict[str, Any]:
         "oidc",
         "authorization",
         "flight",
+        "pgwire",
+        "acl",
         "shutdown_grace_secs",
     }
     if unexpected:
@@ -448,6 +450,15 @@ def validate_config(data: Any) -> dict[str, Any]:
             )
             for name, value in flight.items()
         }
+    if "pgwire" in data:
+        pgwire = data["pgwire"]
+        if not isinstance(pgwire, dict) or set(pgwire) - {"cross_catalog_reads"}:
+            raise AuthFileError("pgwire contains unsupported runtime options")
+        if any(type(value) is not bool for value in pgwire.values()):
+            raise AuthFileError("pgwire.cross_catalog_reads must be true or false")
+        result["pgwire"] = dict(pgwire)
+    if "acl" in data:
+        result["acl"] = _validated_acl(data["acl"])
     if "tls" in data:
         result["tls"] = _validated_tls(data["tls"])
     if "oidc" in data:
@@ -456,6 +467,39 @@ def validate_config(data: Any) -> dict[str, Any]:
         result["authorization"] = _validated_authorization(
             data["authorization"], result.get("oidc", [])
         )
+    return result
+
+
+def _validated_acl(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) - {"store", "engine", "admins"}:
+        raise AuthFileError("acl contains unsupported options")
+    result: dict[str, Any] = {}
+    for name, required in (("store", True), ("engine", False)):
+        if not required and name not in value:
+            continue
+        path = value.get(name)
+        if not isinstance(path, str) or not path:
+            raise AuthFileError(f"acl.{name} must be a nonempty path")
+        result[name] = path
+    admins = value.get("admins")
+    if not isinstance(admins, list) or not admins:
+        raise AuthFileError("acl.admins must list at least one principal")
+    for admin in admins:
+        provider, separator, subject = (
+            admin.partition("~") if isinstance(admin, str) else ("", "", "")
+        )
+        if (
+            not separator
+            or not provider
+            or not subject
+            or admin != admin.strip()
+            or any(ord(character) < 32 or ord(character) == 127 for character in admin)
+        ):
+            raise AuthFileError(
+                "acl.admins must contain provider-namespaced principal IDs, "
+                "such as local~alice"
+            )
+    result["admins"] = list(admins)
     return result
 
 
@@ -527,6 +571,13 @@ def render_config(config: dict[str, Any]) -> str:
     if "flight" in config:
         lines.extend(["", "[flight]"])
         lines.extend(f"{name} = {value}" for name, value in config["flight"].items())
+    for section in ("pgwire", "acl"):
+        if section in config:
+            lines.extend(["", f"[{section}]"])
+            lines.extend(
+                f"{name} = {_toml_value(value)}"
+                for name, value in config[section].items()
+            )
     for username in sorted(config["users"]):
         user = config["users"][username]
         salt = ", ".join(str(byte) for byte in user["salt"])
