@@ -4,6 +4,7 @@ import importlib.util
 import io
 import stat
 import tempfile
+import tomllib
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -367,6 +368,59 @@ class DuckflightAuthTests(unittest.TestCase):
             config = duckflight_auth.read_config(path)
             self.assertEqual(config["flight"], flight)
             self.assertEqual(config["shutdown_grace_secs"], 0)
+
+    def test_pgwire_and_acl_sections_survive_user_edits(self) -> None:
+        pgwire = {"cross_catalog_reads": True}
+        acl = {
+            "store": "roles.duckdb",
+            "engine": "/opt/duckflight/acl engine",
+            "admins": ["local~alice", "corp~bob@example.com"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duckflight.toml"
+            path.write_text(
+                "[pgwire]\ncross_catalog_reads = true\n\n"
+                '[acl]\nstore = "roles.duckdb"\n'
+                'engine = "/opt/duckflight/acl engine"\n'
+                'admins = ["local~alice", "corp~bob@example.com"]\n'
+            )
+            path.chmod(0o600)
+            with mock.patch.object(
+                duckflight_auth.getpass, "getpass", return_value="correct horse"
+            ):
+                self.assertEqual(
+                    duckflight_auth.main(["user", "add", "alice", "--file", str(path)]),
+                    0,
+                )
+            config = duckflight_auth.read_config(path)
+            self.assertEqual(config["pgwire"], pgwire)
+            self.assertEqual(config["acl"], acl)
+            self.assertIn("alice", config["users"])
+            self.assertEqual(tomllib.loads(path.read_text())["acl"], acl)
+
+    def test_pgwire_and_acl_sections_reject_invalid_values(self) -> None:
+        acl = {"store": "roles.duckdb", "admins": ["local~alice"]}
+        invalid = [
+            {"pgwire": {"cross_catalog_reads": "yes"}},
+            {"pgwire": {"cross_catalog_writes": True}},
+            {"pgwire": []},
+            {"acl": []},
+            {"acl": {"admins": ["local~alice"]}},
+            {"acl": acl | {"store": ""}},
+            {"acl": acl | {"engine": ""}},
+            {"acl": acl | {"admins": []}},
+            {"acl": acl | {"admins": ["alice"]}},
+            {"acl": acl | {"admins": ["local~"]}},
+            {"acl": acl | {"admins": [" local~alice"]}},
+            {"acl": acl | {"admins": [7]}},
+            {"acl": acl | {"mode": "strict"}},
+        ]
+        for config in invalid:
+            with (
+                self.subTest(config=config),
+                self.assertRaises(duckflight_auth.AuthFileError),
+            ):
+                duckflight_auth.validate_config(config)
 
     def test_runtime_options_reject_wrong_units_and_invalid_values(self) -> None:
         invalid = [

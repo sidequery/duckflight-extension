@@ -67,10 +67,9 @@ Every command writes to `duckflight.toml` in the current directory unless you pa
 `--replace` rotates an existing user or token. `check` validates the whole file, and
 `duckflight-auth tls` validates the certificate and key once a `[tls]` section exists.
 
-The helper understands users, tokens, TLS, OIDC, authorization rules, `[flight]` and
-`shutdown_grace_secs`, and preserves them when it rewrites the file. It rejects files containing
-`[pgwire]` or `[acl]`. If you need those sections, add them last and keep a credential-only copy
-for later helper edits.
+The helper understands every section of the file (users, tokens, TLS, OIDC, authorization rules,
+`[flight]`, `[pgwire]`, `[acl]` and `shutdown_grace_secs`) and preserves them when it rewrites the
+file. Comments are not preserved.
 
 ## Users
 
