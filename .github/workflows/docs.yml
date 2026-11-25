@@ -1,0 +1,42 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snippets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Lint snippet runner
+        run: |
+          uv run --with ruff ruff check test/docs_snippets.py
+          uv run --with ruff ruff format --check test/docs_snippets.py
+      - name: Check links and helper pin
+        run: uv run test/docs_snippets.py --links-only
+      - name: Download DuckDB CLI
+        run: |
+          set -euo pipefail
+          mkdir -p build/docs-host
+          curl --fail --location --retry 3 \
+            "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz" \
+            -o build/docs-host/cli.tar.gz
+          tar -xzf build/docs-host/cli.tar.gz -C build/docs-host
+          build/docs-host/duckdb -version
+      - name: Install psql
+        run: command -v psql || (sudo apt-get update && sudo apt-get install -y postgresql-client)
+      # Runs against the published Community build, which is what a reader installs.
+      - name: Run documentation snippets
+        run: uv run test/docs_snippets.py build/docs-host/duckdb

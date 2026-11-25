@@ -1,3 +1,196 @@
-# SQL functions
+# SQL reference
 
-The complete guide is now in the [README SQL API section](../README.md#sql-api).
+Loading DuckFlight adds three groups of SQL objects to the host database:
+
+- [Server functions](#server-functions) that start, list and stop listeners.
+- [PostgreSQL compatibility helpers](#postgresql-compatibility-helpers) so PostgreSQL-flavoured
+  queries and client tools work.
+- [Session diagnostics](#session-diagnostics) that describe connected PostgreSQL clients.
+
+## Server functions
+
+Run these in the DuckDB process that loaded the extension. Every listener serves that process's
+database, including an in-memory one, for as long as the process stays running.
+
+```sql doctest=host
+load duckflight;
+
+select * from duckflight_core_status();
+select * from duckflight_pg_serve('127.0.0.1:5433', 'duckflight.toml');
+select * from duckflight_flight_serve('127.0.0.1:31337', 'duckflight.toml');
+select * from duckflight_http_serve('127.0.0.1:4080', 'duckflight.toml');
+select * from duckflight_quack_serve('127.0.0.1:4081', 'duckflight.toml');
+select * from duckflight_servers();
+
+select * from duckflight_stop('pgwire', '127.0.0.1:5433');
+select * from duckflight_stop('flight', '127.0.0.1:31337');
+select * from duckflight_stop('http', '127.0.0.1:4080');
+select * from duckflight_stop('quack', '127.0.0.1:4081');
+```
+
+| Function | Arguments | Returned columns |
+| --- | --- | --- |
+| `duckflight_core_status()` | None | `loaded` (boolean), `abi_version` (unsigned bigint), `detail` (varchar) |
+| `duckflight_pg_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
+| `duckflight_flight_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
+| `duckflight_http_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
+| `duckflight_quack_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
+| `duckflight_servers()` | None | `protocol`, `address` (varchar), one row per listener |
+| `duckflight_stop(protocol, address)` | Two varchar values | `status` (varchar) |
+
+### Starting
+
+`address` is `host:port`. Port `0` asks the operating system for a free port. The returned address
+is authoritative: use it to connect and to stop, including when a hostname resolved to an IP
+address. A start function returns once its background listener is running.
+
+`config_file` is the path to [`duckflight.toml`](CONFIGURATION.md#duckflighttoml). Every listener
+requires authentication, and a non-loopback address also requires TLS; see
+[Authentication](AUTHENTICATION.md). The HTTP and Quack listeners need a bearer token, OIDC
+provider or mTLS identity in that file, because they do not accept PostgreSQL users.
+
+DuckDB 1.5.6 builds provide the PostgreSQL and Flight SQL functions only.
+
+### Stopping
+
+`duckflight_stop` takes the protocol name and the address the start function returned.
+
+| Listener | Protocol name |
+| --- | --- |
+| PostgreSQL | `pgwire` (also `postgres` or `postgresql`) |
+| Flight SQL | `flight` |
+| HTTP | `http` |
+| Quack | `quack` |
+
+A successful stop returns `stopped <protocol> server on <address>`. Stopping an address that is not
+registered returns a `no ... server on ...` status rather than an error. ADBC clients connect to
+the Flight SQL listener; there is no separate `adbc` protocol or `duckflight_adbc_serve` function.
+
+How long a stopping listener waits for running queries is set by
+[`shutdown_grace_secs`](CONFIGURATION.md#top-level). Closing DuckDB stops every listener.
+
+### Status
+
+`duckflight_core_status()` reports whether DuckFlight's core initialized. `loaded = true` does not
+mean a listener is running; `duckflight_servers()` lists those. `abi_version` is the interface
+version between the extension and its core, not the DuckDB or DuckFlight release. When `loaded` is
+false, `detail` carries the reason.
+
+## PostgreSQL compatibility helpers
+
+DuckFlight installs SQL macros in the host database so common PostgreSQL functions exist. They
+implement a subset of PostgreSQL behaviour, not a complete function catalog. Some names also have
+native DuckDB overloads.
+
+| Area | Signatures | Purpose |
+| --- | --- | --- |
+| Strings | `initcap(s)`, `btrim(s, chars)` | Capitalize space-separated words; trim specified characters |
+| SQL quoting | `quote_literal(s)`, `quote_ident(s)`, `quote_nullable(s)` | Quote SQL values or identifiers; represent a null as SQL text |
+| Numbers | `div(a, b)`, `width_bucket(x, minv, maxv, count)` | Truncated division; equal-width numeric buckets |
+| Aggregates | `every(x)` | Boolean AND across rows |
+| Arrays | `array_ndims(arr)`, `array_remove(arr, val)`, `array_replace(arr, old, new)` | Inspect dimensions or transform array elements |
+| JSON | `json_typeof(j)`, `jsonb_array_length(j)` | Inspect a JSON value or array length |
+| JSON aggregates | `json_agg(x)`, `json_object_agg(k, v)` | Build JSON arrays or objects from rows |
+| Date/time | `to_char(val, fmt)`, `to_date(val, fmt)`, `to_timestamp(val, fmt)` | Format or parse supported date/time patterns |
+
+```sql doctest=host
+select initcap('hello world');                          -- Hello World
+select btrim('..hello..', '.');                         -- hello
+select quote_ident('order');                           -- "order"
+select div(7, 2);                                      -- 3
+select array_remove([1, 2, 1], 1);                      -- [2]
+select json_typeof('{"ok":true}');                      -- object
+select to_char(date '2026-09-06', 'YYYY-MM-DD');          -- 2026-09-06
+```
+
+### Known limits
+
+| Helper | Limit |
+| --- | --- |
+| `btrim` | Takes two arguments only |
+| `to_char` | Handles `YYYY-MM-DD`, `Day`, `YYYY-MM-DD HH24:MI:SS` and `9999.99`; any other pattern converts the value to text |
+| `to_date` | Translates `YYYY-MM-DD`; other patterns are passed to DuckDB's `strptime` |
+| `to_timestamp(val, fmt)` | Translates `YYYY-MM-DD HH24:MI:SS`; other patterns are passed to DuckDB's `strptime` |
+
+Do not assume arbitrary PostgreSQL format patterns, PostgreSQL array null semantics, or every
+PostgreSQL overload.
+
+### Catalogs and query rewriting
+
+DuckFlight also supplies PostgreSQL catalog views so clients can discover tables, columns and
+types. On top of those, the PostgreSQL listener rewrites incoming SQL for compatibility. That
+rewriting belongs to the PostgreSQL protocol path only: SQL run directly in the host DuckDB, or
+over Flight SQL, HTTP or Quack, does not pass through it. Flight SQL exposes metadata through its
+own protocol methods.
+
+### List what your build installed
+
+Each helper carries a catalog comment:
+
+```sql doctest=host
+select function_name, comment
+from duckdb_functions()
+where comment like 'PostgreSQL compatibility:%' or comment like 'Internal %'
+order by function_name;
+```
+
+For names, signatures and macro definitions:
+
+```sql doctest=host
+select schema_name, function_name, function_type, parameters, macro_definition
+from duckdb_functions()
+where starts_with(function_name, 'duckflight_')
+   or function_name in ('initcap', 'btrim', 'array_remove', 'json_typeof', 'to_char')
+order by schema_name, function_name, function_type;
+```
+
+This also returns internal helpers and any matching functions you created yourself. What is listed
+depends on the DuckFlight version installed.
+
+## Session diagnostics
+
+These macros describe PostgreSQL sessions. Run them through a PostgreSQL client connected to
+DuckFlight. Scalar macros go in the select list; table macros are queried with `select * from`.
+
+| Function | Result | Meaning |
+| --- | --- | --- |
+| `duckflight_current_user()` | varchar | User of this session |
+| `duckflight_current_database()` | varchar | Database name the client connected to, which can differ from the underlying DuckDB catalog |
+| `duckflight_visible_database()` | varchar | Underlying DuckDB catalog selected for catalog visibility |
+| `duckflight_session_pid()` | integer | Session identifier. Not the operating-system process ID |
+| `duckflight_runtime_databases()` | table with `datname` | Distinct database names across tracked PostgreSQL sessions, not every attached database |
+| `duckflight_pg_stat_activity()` | table | Tracked sessions: `pid`, `datname`, `usename`, `application_name`, `state`, `query` and more |
+| `duckflight_pg_stat_ssl()` | table | `pid` and `ssl` for the current user's sessions |
+| `duckflight_database_oid(name)` | unsigned integer | Database identifier used by the compatibility catalogs |
+
+```sql doctest=pg
+select duckflight_current_user(),
+       duckflight_current_database(),
+       duckflight_visible_database(),
+       duckflight_session_pid();
+
+select * from duckflight_runtime_databases();
+
+select pid, datname, usename, application_name, state, query
+from duckflight_pg_stat_activity();
+
+select pid, ssl from duckflight_pg_stat_ssl();
+
+select duckflight_database_oid(duckflight_current_database());
+```
+
+### What to expect
+
+- **Other users' sessions are redacted.** In `duckflight_pg_stat_activity()`, rows belonging to
+  other users show `<insufficient privilege>` as the query, and their state, client address and
+  timestamps are null.
+- **SSL details are partial.** `duckflight_pg_stat_ssl()` lists only the current user's sessions.
+  TLS version, cipher and certificate columns are currently null.
+- **PostgreSQL sessions only.** These do not describe Flight SQL, HTTP or Quack clients.
+- **Placeholders in the host session.** Called directly in the DuckDB process that loaded the
+  extension, the macros return fixed defaults: `duckflight` for the current user and database,
+  `memory` for the visible database, `0` for the session PID, and empty tables. These are not
+  measurements of the host connection.
+- **OIDs are not stable identifiers.** `duckflight_database_oid` assigns `1`, `2` and `3` to
+  `postgres`, `template0` and `template1`, and derives every other value from DuckDB's hash of the
+  name. Do not treat derived values as collision-free or stable across DuckDB versions.

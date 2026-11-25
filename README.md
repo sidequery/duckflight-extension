@@ -1,806 +1,129 @@
-# DuckFlight DuckDB extension
+# DuckFlight
 
-DuckFlight turns any DuckDB database into a PostgreSQL, Arrow Flight SQL, HTTP, and Quack server. Query it with
-`psql`, PostgreSQL drivers and BI tools, ADBC Flight SQL clients, or another DuckDB instance through
-Airport. Every client reads and writes the same live database—there is no second service to run and
-no data to export or copy.
+DuckFlight is a DuckDB extension that turns the database you already have open into a server.
+Load it, start a listener, and query the same live database from `psql`, PostgreSQL drivers and BI
+tools, Arrow Flight SQL (ADBC) clients, another DuckDB, or plain HTTP. There is no second service to run and no data
+to export or copy: every client reads and writes the database that loaded the extension.
 
-- [Install and load](#install-and-load)
-- [Docker](#docker)
-- [Kubernetes](#kubernetes)
-- [SQL API](#sql-api)
-- [Authentication setup](#authentication-setup)
-- [SQL access controls](#sql-access-controls)
-- [Observability](#observability)
-- [Build and test](#build-and-test)
-- [Security](#security)
-- [License](#license)
+## Quickstart
 
-## Install and load
+This takes about five minutes and stays on your own machine. You need DuckDB 2.0 on Linux or macOS
+and [uv](https://docs.astral.sh/uv/) to run the credential helper.
 
-Install the signed extension directly from DuckDB Community Extensions:
+**1. Create a user.** Listeners never run without authentication, so start by creating a config
+file with one user. The helper prompts for a password and writes `duckflight.toml` in the current
+directory.
 
-```sql
+```sh doctest
+uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.20/scripts/duckflight_auth.py user add alice
+```
+
+**2. Start a PostgreSQL listener.** Run `duckdb` in the same directory and leave it open; the
+server lives inside this process.
+
+```sql doctest=host
 install duckflight from community;
 load duckflight;
+
+create table trips as select * from (values (1, 'Lisbon'), (2, 'Osaka')) t(id, city);
+
+select * from duckflight_pg_serve('127.0.0.1:5433', 'duckflight.toml');
 ```
 
-DuckDB downloads the build matching your DuckDB version and platform. DuckFlight currently supports
-Linux and macOS on amd64 and arm64.
+The function returns one row with the protocol and bound address once the listener is accepting
+connections.
 
-### DuckDB 2.0 (Sidequery repository)
-
-Sidequery publishes signed DuckDB **2.0.0** builds for Linux and macOS on amd64 and
-arm64 at `https://extensions.sidequery.dev`. You can check your DuckDB version with
-`pragma version;`.
-
-In the matching DuckDB CLI, enable custom repositories and register Sidequery:
-
-```sql
-set allow_extension_repositories = 'allowed';
-create extension repository sidequery
-    with prefix 'https://extensions.sidequery.dev';
-
-install duckflight from sidequery;
-load duckflight from sidequery;
-select * from duckflight_core_status();
-```
-
-The core status reports `loaded = true` when ready. See
-[authentication setup](#authentication-setup) and the [SQL API](#sql-api) to start listeners.
-
-DuckDB automatically installs `httpfs` for HTTPS repository access. Keep unsigned
-extensions disabled; these builds use Sidequery's repository signing key.
-
-<details>
-<summary>Verify the repository signing key</summary>
-
-To inspect the repository's public-key fingerprint:
-
-```sql
-select repository_name, prefix, key_fingerprints
-from duckdb_extension_repositories()
-where repository_name = 'sidequery';
-```
-
-Sidequery's fingerprint is:
-
-```text
-sha256:3913381c7400db553886bcf98a0f5dddaed632a3502e8cf618d40ecabc4ee24d
-```
-
-</details>
-
-### GitHub release artifacts
-
-<details>
-<summary>Load an unsigned artifact from GitHub Releases</summary>
-
-Download the artifact for your platform from the
-[latest release](https://github.com/sidequery/duckflight-extension/releases/latest). Release
-artifacts are not signed by DuckDB, so start the CLI with unsigned extensions enabled:
+**3. Connect.** From a second terminal, use any PostgreSQL client. `memory` is the name of DuckDB's
+in-memory database.
 
 ```sh
-duckdb -unsigned
+psql "host=127.0.0.1 port=5433 user=alice dbname=memory"
 ```
 
-Verify the download against `SHA256SUMS`, rename it to `duckflight.duckdb_extension`,
-then load it by its absolute path:
-
-```sql
-load '/absolute/path/to/duckflight.duckdb_extension';
-select * from duckflight_core_status();
+```sql doctest=pg
+select * from trips;
+insert into trips values (3, 'Quito');
 ```
 
-Choose the asset matching `linux_amd64`, `linux_arm64`, `osx_amd64`, or `osx_arm64`.
-The DuckDB version must also match the asset name. Current release artifacts and the
-Docker image below target DuckDB 1.5.6.
-The `-unsigned` flag weakens DuckDB's extension-signature protection for that process, so use it only
-with an artifact downloaded from this repository's releases and verify its checksum when moving it
-through another system.
+The new row is immediately visible in the DuckDB session from step 2.
 
-</details>
+**4. Stop.** In the DuckDB session:
 
-## Docker
-
-The image includes the DuckDB **1.5.6** CLI and the current extension built
-from this checkout, with the checksum-pinned production core embedded. It starts both
-PostgreSQL and Flight SQL against one persistent database, runs as UID/GID `10001`,
-and downloads nothing at startup. The runtime uses `scratch` with only the CLI, extension,
-required shared libraries, CA certificates, and a small native lifecycle launcher.
-
-Build locally, including the pinned build-tool submodule:
-
-```sh
-git submodule update --init extension-ci-tools
-docker build -t duckflight:local .
-```
-
-Provision a directory containing `duckflight.toml`, its TLS certificate, and private key
-using the [authentication helper](#use-the-helper). Both default listeners bind to
-`0.0.0.0` inside the container, so **authentication and TLS are required**, even when
-Docker publishes ports only on host loopback. Certificate names must match the hostname
-used by clients (for local testing, include `localhost` and `127.0.0.1` in the SAN).
-Keep config and private key mode `0600`, owned by the container UID, and make the
-directory traversable by that UID. Alternatively use `--user UID:GID` with matching
-permissions for the secrets and data directory. Mount the entire secrets directory so
-relative certificate paths continue to work.
-
-```sh
-export DUCKFLIGHT_SECRETS_DIR=/absolute/path/to/duckflight-secrets
-docker compose -f docker/compose.yaml up --build -d
-```
-
-Or run directly:
-
-```sh
-docker run -d --name duckflight \
-  -p 127.0.0.1:5433:5433 -p 127.0.0.1:31337:31337 \
-  --mount type=volume,src=duckflight-data,dst=/data \
-  --mount type=bind,src="$DUCKFLIGHT_SECRETS_DIR",dst=/run/secrets,readonly \
-  -e DUCKFLIGHT_MEMORY_LIMIT=1GB -e DUCKFLIGHT_THREADS=2 \
-  duckflight:local
-```
-
-Wait for `DuckFlight ready` in `docker logs duckflight`. Connect with PostgreSQL
-`sslmode=verify-full` and the issuing CA (`sslrootcert`), or Flight SQL at
-`grpc+tls://localhost:31337` with the issuing CA and configured user/token.
-The [Airport example](#bearer-tokens) uses the same Flight listener.
-
-| Environment variable | Default | Purpose |
-| --- | --- | --- |
-| `DUCKFLIGHT_DATABASE` | `/data/duckflight.duckdb` | Persistent database path; `:memory:` for an ephemeral database |
-| `DUCKFLIGHT_CONFIG` | `/run/secrets/duckflight.toml` | Mounted authentication/TLS config; never baked into the image |
-| `DUCKFLIGHT_PG_ADDRESS` | `0.0.0.0:5433` | PostgreSQL bind address; empty string disables PostgreSQL |
-| `DUCKFLIGHT_FLIGHT_ADDRESS` | `0.0.0.0:31337` | Flight SQL bind address; empty string disables Flight |
-| `DUCKFLIGHT_MEMORY_LIMIT` | DuckDB default | DuckDB memory limit, e.g. `1GB`; leave room for other process memory |
-| `DUCKFLIGHT_THREADS` | DuckDB default | DuckDB worker threads, e.g. `2` |
-| `DUCKFLIGHT_TEMP_DIRECTORY` | DuckDB default | Writable spill directory; mount separate storage if needed |
-| `DUCKFLIGHT_INIT_SQL` | Unset | Path inside the container to a mounted SQL file, e.g. `/run/secrets/init.sql`; executed before listeners start **on every startup**; make it idempotent |
-
-At least one protocol must be enabled. Changing bind ports also requires changing Docker's
-port mapping. Authentication, token scopes, and TLS remain authoritative in the TOML file;
-plaintext passwords are not accepted through environment variables. No default credentials
-or automatic self-signed identities are created. Invalid config or failed startup SQL exits
-the process with a failure status. `docker stop` stops listeners and closes the database.
-Allow a suitable shutdown timeout for your workload. Use one container per database file;
-do not share a writable DuckDB file between processes.
-
-Client SQL runs with `enable_external_access=false` and `lock_configuration=true`.
-The launcher applies these settings after trusted startup SQL and before opening either
-listener, and replaces `allowed_configs` with only `TimeZone`, needed by PgWire session
-initialization. Startup configuration cannot leave other client exceptions to the lock.
-Startup SQL must leave configuration unlocked so the launcher can apply this final policy;
-prelocked initialization fails before listeners start.
-Clients can set their timezone but cannot enable external access, change resource settings,
-install/load extensions, or read arbitrary local files or remote URLs. Database reads,
-writes, persistence, and spilling remain available. Set resource limits through the
-environment or startup SQL; load any required extensions during startup.
-
-For client file imports/exports, allowlist only dedicated data files or directories in
-`DUCKFLIGHT_INIT_SQL`, for example `set allowed_directories=['/imports'];` for a mounted
-data directory, or `set allowed_paths=['/imports/input.csv'];` for one file. DuckDB also
-automatically permits attached database/WAL files and the configured spill directory.
-Keep databases, spill storage, and every allowed path separate from authentication/TLS
-files and other secrets. Never allowlist `/run/secrets`, a parent such as `/`, or aliases
-to secret files. Startup SQL is trusted operator code and must not start listeners itself
-before the launcher's policy is applied. Use the offline CLI below for unrestricted
-administrative work.
-
-For an offline DuckDB CLI session, stop the server first and attach the same volume:
-
-```sh
-docker stop duckflight
-docker run --rm -it --mount type=volume,src=duckflight-data,dst=/data \
-  --entrypoint duckdb duckflight:local -unsigned /data/duckflight.duckdb
-```
-
-Load `/opt/duckflight/duckflight.duckdb_extension` inside that session if needed. The
-source-built extension is unsigned; the server enables unsigned extensions to load its
-bundled artifact. Build inputs include checksum-verified core/CLI downloads and the Cargo
-lockfile. The image contains the core's binary-distribution license.
-
-The Docker workflow builds and smoke-tests Linux amd64 and arm64 natively on pull requests.
-On `main` (or a manual run against `main`) it publishes tested images to
-`ghcr.io/sidequery/duckflight-extension`, with `latest` and full commit-SHA tags. Prefer a
-commit tag or image digest for deployments. The publishing workflow checks that both
-architectures are available without registry credentials. Replace
-`duckflight:local` in the commands above with that registry image and tag to consume a
-published build.
-
-To run the same real-client container checks locally:
-
-```sh
-uv run test/docker_smoke.py duckflight:local
-```
-
-## Kubernetes
-
-For Iceberg or DuckLake, use the [DuckFlight Helm chart](charts/duckflight/README.md).
-It deploys independent workers with in-memory DuckDB, external lake catalogs,
-TLS/authentication and bootstrap Secrets, and ephemeral disk for spill. The chart
-uses a Deployment with two replicas by default and creates no persistent volumes.
-
-## SQL API
-
-DuckFlight adds server-control table functions and, when the real core initializes, PostgreSQL
-compatibility macros and catalog views. This guide covers the basics useful to extension users.
-The public test mock only implements server lifecycle operations; it does not provide the core's
-SQL compatibility layer.
-
-### Start, inspect, and stop servers
-
-Run these in the DuckDB instance that loads the extension. All protocols use that same database,
-including an in-memory database. Keep the host process running while clients connect.
-
-HTTP and Quack share the host database with PgWire and Flight SQL.
-
-```sql
-load duckflight;
-
-select * from duckflight_core_status();
-select * from duckflight_pg_serve('127.0.0.1:5433', '/path/to/duckflight.toml');
-select * from duckflight_flight_serve('127.0.0.1:31337', '/path/to/duckflight.toml');
-select * from duckflight_http_serve('127.0.0.1:4080', '/path/to/duckflight.toml');
-select * from duckflight_quack_serve('127.0.0.1:4081', '/path/to/duckflight.toml');
+```sql doctest=host
 select * from duckflight_servers();
-
 select * from duckflight_stop('pgwire', '127.0.0.1:5433');
-select * from duckflight_stop('flight', '127.0.0.1:31337');
-select * from duckflight_stop('http', '127.0.0.1:4080');
-select * from duckflight_stop('quack', '127.0.0.1:4081');
 ```
 
-| Function | Arguments | Returned columns |
-| --- | --- | --- |
-| `duckflight_core_status()` | None | `loaded` (boolean), `abi_version` (unsigned bigint), `detail` (varchar) |
-| `duckflight_pg_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
-| `duckflight_flight_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
-| `duckflight_http_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
-| `duckflight_quack_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
-| `duckflight_servers()` | None | `protocol`, `address` (varchar), one row per listener |
-| `duckflight_stop(protocol, address)` | Two varchar values | `status` (varchar) |
+Plaintext connections like this one are allowed on loopback addresses only. To accept connections
+from other machines, add a TLS certificate: see [Authentication](docs/AUTHENTICATION.md#tls).
 
-Start functions return after starting a background listener. Use `host:port` for the address;
-port `0` asks the operating system to choose a free port. The returned address is authoritative:
-use it when connecting or stopping, including when a hostname resolves to an IP address.
+## Protocols
 
-`duckflight_stop` accepts `pgwire` (also `postgres` or `postgresql`), `flight`, `http`, and `quack`. Stopping an
-address that is not registered returns a `no ... server on ...` status. The public extension's
-Flight function is `duckflight_flight_serve`; `duckflight_adbc_serve` and the `adbc` protocol name
-from older core examples are not supported here. ADBC clients connect to the Flight SQL listener.
+All listeners serve the same database and can run at the same time.
 
-`loaded = true` reports core initialization, not whether a listener is running. Use
-`duckflight_servers()` to list listeners. `abi_version` is the extension/core interface version,
-not the DuckDB or DuckFlight release version.
+| Protocol | Start function | Clients | Credentials accepted |
+| --- | --- | --- | --- |
+| PostgreSQL wire | `duckflight_pg_serve` | `psql`, Psycopg, JDBC, SQLAlchemy, BI tools | Users, OIDC, mTLS |
+| Arrow Flight SQL | `duckflight_flight_serve` | ADBC drivers, DuckDB's Airport extension | Users, bearer tokens, OIDC, mTLS |
+| HTTP (Arrow IPC) | `duckflight_http_serve` | Anything that can `POST` JSON and read Arrow | Bearer tokens, OIDC, mTLS |
+| Quack | `duckflight_quack_serve` | Another DuckDB, through its `quack` extension | Bearer tokens, OIDC, mTLS |
 
-Listeners require an authentication config, and non-loopback listeners require TLS. See
-[Authentication setup](#authentication-setup) for config creation and client connection examples.
+Working connection examples for each are in [Clients](docs/CLIENTS.md).
 
-HTTP and Quack accept configured bearer tokens, OIDC identities, or mTLS identities;
-a PostgreSQL users-only config is insufficient for these listeners. The HTTP listener
-provides the Arrow IPC API, including `POST /streaming-query`, `/streaming-mutate`,
-`/streaming-ingest`, `/tx/begin`, and `/tx/end`. The Quack listener serves DuckDB's
-binary protocol at `POST /quack`; it is a separate listener from the Arrow IPC API.
-Both use the explicit TOML authentication/TLS configuration, not standalone server
-authentication environment variables.
+## Compatibility
 
-Run the real-host protocol smoke test against a freshly bundled extension:
+DuckFlight runs on Linux and macOS, amd64 and arm64. Windows, WebAssembly and Linux musl are not
+supported.
 
-```sh
-uv run test/release/http_quack_smoke.py /path/to/duckdb build/release/duckflight.duckdb_extension
+| Your DuckDB | Install from | DuckFlight version | Notes |
+| --- | --- | --- | --- |
+| 2.0.0 | Community or Sidequery repository | 0.1.20 | All four protocols |
+| 1.5.6 | Community | 0.1.12 | PostgreSQL and Flight SQL only |
+| 2.0.1 | Build coming | | Until it ships, Community serves 0.1.17, which loads but cannot start its core on 2.0.1. [SQL access controls](docs/ACCESS_CONTROL.md) need the 2.0.1 build |
+
+Check what you have with:
+
+```sql doctest=host
+pragma version;
+select extension_version from duckdb_extensions() where extension_name = 'duckflight';
 ```
 
-To verify a signed installation, including HTTP and Quack, keep unsigned extensions disabled:
+[Install](docs/INSTALL.md) covers every channel, including the Docker image.
 
-```sh
-uv run test/release/http_quack_smoke.py /path/to/duckdb --repository https://extensions.sidequery.dev
-```
+## Documentation
 
-### Common PostgreSQL compatibility helpers
-
-The core bootstraps SQL macros in the host database for PostgreSQL-style queries and client
-compatibility. These are representative helpers, not an exhaustive PostgreSQL function catalog.
-Some names also have native DuckDB overloads; inspect the installed signatures when in doubt.
-
-The core supplies catalog comments alongside its PostgreSQL compatibility macros and internal
-session/catalog helpers:
-
-```sql
-select function_name, comment
-from duckdb_functions()
-where comment like 'PostgreSQL compatibility:%' or comment like 'Internal %'
-order by function_name;
-```
-
-The Community Extensions page collects these comments automatically after loading the extension.
-The seven native server-control functions are documented above because the v1 C API does not
-expose description setters for C API table functions.
-
-| Area | Useful signatures | Purpose |
-| --- | --- | --- |
-| Strings | `initcap(s)`, `btrim(s, chars)` | Capitalize space-separated words; trim specified characters |
-| SQL quoting | `quote_literal(s)`, `quote_ident(s)`, `quote_nullable(s)` | Quote SQL values or identifiers; represent a null as SQL text |
-| Numbers | `div(a, b)`, `width_bucket(x, minv, maxv, count)` | Truncated division; equal-width numeric buckets |
-| Aggregates | `every(x)` | Boolean AND across rows |
-| Arrays | `array_ndims(arr)`, `array_remove(arr, val)`, `array_replace(arr, old, new)` | Inspect dimensions or transform array elements |
-| JSON | `json_typeof(j)`, `jsonb_array_length(j)` | Inspect a JSON value or array length |
-| JSON aggregates | `json_agg(x)`, `json_object_agg(k, v)` | Build JSON arrays or objects from rows |
-| Date/time | `to_char(val, fmt)`, `to_date(val, fmt)`, `to_timestamp(val, fmt)` | Format or parse supported date/time patterns |
-
-For example, after loading a bundled extension:
-
-```sql
-select initcap('hello world');                          -- Hello World
-select btrim('..hello..', '.');                         -- hello
-select quote_ident('order');                           -- "order"
-select div(7, 2);                                      -- 3
-select array_remove([1, 2, 1], 1);                      -- [2]
-select json_typeof('{"ok":true}');                      -- object
-select to_char(date '2026-09-06', 'YYYY-MM-DD');          -- 2026-09-06
-```
-
-These helpers implement a subset of PostgreSQL behavior. For example, `btrim` here takes two
-arguments. `to_char` explicitly handles `YYYY-MM-DD`, `Day`, `YYYY-MM-DD HH24:MI:SS`, and
-`9999.99`; other patterns fall back to converting the value to text. `to_date` translates
-`YYYY-MM-DD`, and the two-argument `to_timestamp` translates `YYYY-MM-DD HH24:MI:SS`; other
-patterns are passed to DuckDB's `strptime`. Do not assume arbitrary PostgreSQL format patterns,
-array null semantics, or all PostgreSQL overloads are supported.
-
-### Catalogs and client SQL
-
-The core also supplies compatibility metadata for PostgreSQL clients to discover tables,
-columns, and types. PgWire applies SQL compatibility rewrites on top of those objects.
-That rewriting is part of the PostgreSQL protocol path: running SQL directly in the host DuckDB
-does not pass through it. Flight SQL exposes metadata through its own protocol methods.
-
-### DuckFlight session and diagnostic utilities
-
-The core also adds the following `duckflight_*` macros. Scalar macros go in the select list;
-table macros are queried with `select * from ...`.
-
-| Function | Result | Purpose in a PgWire session |
-| --- | --- | --- |
-| `duckflight_current_user()` | varchar | User associated with the client session |
-| `duckflight_current_database()` | varchar | Client-facing database name, which can differ from the underlying DuckDB catalog |
-| `duckflight_visible_database()` | varchar | Underlying DuckDB database selected for catalog visibility |
-| `duckflight_session_pid()` | integer | PgWire backend/session identifier, not the host operating-system process ID |
-| `duckflight_runtime_databases()` | Table with `datname` | Distinct database names represented in tracked PgWire sessions, not all attached databases |
-| `duckflight_pg_stat_activity()` | Table with session and query metadata | Inspect tracked PgWire sessions, including `pid`, `datname`, `usename`, `application_name`, `state`, and `query` |
-| `duckflight_pg_stat_ssl()` | Table with TLS metadata | Inspect `pid` and `ssl` for sessions belonging to the current user |
-| `duckflight_database_oid(name)` | unsigned integer | Generate the database identifier used by the PostgreSQL compatibility catalogs |
-
-Run these diagnostics through a PostgreSQL client connected to DuckFlight:
-
-```sql
-select duckflight_current_user(),
-       duckflight_current_database(),
-       duckflight_visible_database(),
-       duckflight_session_pid();
-
-select * from duckflight_runtime_databases();
-
-select pid, datname, usename, application_name, state, query
-from duckflight_pg_stat_activity();
-
-select pid, ssl from duckflight_pg_stat_ssl();
-
-select duckflight_database_oid(duckflight_current_database());
-```
-
-PgWire installs connection-local identity values and runtime snapshots for these helpers.
-They describe PgWire sessions, not Flight SQL clients or every connection in the host process.
-For activity rows belonging to other users, query text is `<insufficient privilege>` and details
-such as state, client address, and timestamps are null. The SSL table includes only the current
-user's sessions; TLS version, cipher, and certificate-detail columns are currently null.
-
-Direct calls in the loading DuckDB connection do not receive that PgWire session context. The
-bootstrap defaults are `duckflight` for the current user and current database, `memory` for the
-visible database, `0` for the session PID, and empty tables for runtime databases, activity, and
-SSL. These are placeholders, not measurements of the host connection. Do not treat them as
-Flight SQL session diagnostics either.
-
-`duckflight_database_oid(name)` is a catalog compatibility helper, not a persistent application
-identifier: it assigns `1`, `2`, and `3` to `postgres`, `template0`, and `template1`, respectively,
-and derives other values from DuckDB's hash of the name. Do not rely on those derived values as
-collision-free identifiers or stable IDs across DuckDB versions.
-
-Other core utilities can belong to a different runtime. For example, `sidequery_files()` is
-registered for cloud-runner requests; loading this extension does not register it.
-
-### Discover functions in your installed build
-
-Use DuckDB's function catalog to see names, signatures, and macro definitions:
-
-```sql
-select schema_name, function_name, function_type, parameters, macro_definition
-from duckdb_functions()
-where starts_with(function_name, 'duckflight_')
-   or function_name in ('initcap', 'btrim', 'array_remove', 'json_typeof', 'to_char')
-order by schema_name, function_name, function_type;
-```
-
-This query also includes internal helpers and any matching functions you created yourself.
-The installed core determines compatibility behavior; newer standalone-core documentation may
-describe features absent from your extension build.
+| Guide | Read it when you want to |
+| --- | --- |
+| [Install](docs/INSTALL.md) | Install from Community, the Sidequery repository, or a release artifact |
+| [Clients](docs/CLIENTS.md) | Connect from `psql`, Python, ADBC, Airport, or HTTP |
+| [Authentication](docs/AUTHENTICATION.md) | Add users, tokens, TLS, OIDC or mTLS, and handle the config file safely |
+| [Configuration reference](docs/CONFIGURATION.md) | Look up a `duckflight.toml` key or environment variable |
+| [SQL reference](docs/SQL_FUNCTIONS.md) | Look up a server function, PostgreSQL helper, or session diagnostic |
+| [SQL access controls](docs/ACCESS_CONTROL.md) | Restrict roles to tables, columns, masked values or tenant rows |
+| [Docker](docs/DOCKER.md) | Run DuckFlight as a standalone container |
+| [Kubernetes](charts/duckflight/README.md) | Deploy workers over Iceberg or DuckLake with the Helm chart |
+| [Observability](docs/OBSERVABILITY.md) | Export OTLP traces, metrics, logs and query profiles |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Decode an error message |
 
 ## Authentication setup
 
-Both extension listeners take the path to one `duckflight.toml` file:
-
-```sql
-select * from duckflight_pg_serve('127.0.0.1:5433', '/run/secrets/duckflight.toml');
-select * from duckflight_flight_serve('127.0.0.1:31337', '/run/secrets/duckflight.toml');
-```
-
-Existing users-only TOML files remain valid. The same file may additionally contain generated
-Airport/direct bearer-token hashes and one TLS identity shared by PgWire and Flight.
-For extension-managed listeners, this file is authoritative: process-wide authentication and
-per-protocol TLS environment settings used by standalone DuckFlight services are not merged into or
-allowed to override it.
-
-### Secure defaults
-
-Every listener requires at least one configured user, bearer token, or mTLS identity. An empty
-configuration does not start an anonymous server.
-
-Plaintext transport is permitted only when the address actually bound by the operating system is a
-loopback address (`127.0.0.0/8` or `::1`). Binding `0.0.0.0`, `::`, or any concrete non-loopback
-address requires `[tls]`; startup fails before the listener thread starts when TLS is missing or
-invalid. The certificate's subject alternative names must cover the hostname used by clients.
-
-TLS protects server identity, credentials, queries, and results. The authentication protocols differ:
-
-| Client | Authentication on the wire | Required config |
-| --- | --- | --- |
-| PostgreSQL | PostgreSQL SCRAM-SHA-256 | `[users.*]` |
-| ADBC Flight SQL username/password | Basic authorization during the Flight handshake, then a server-issued bearer | `[users.*]`; TLS outside loopback |
-| Airport or direct bearer ADBC | Bearer on every Flight RPC; no username/password handshake | `[tokens.*]`; TLS outside loopback |
-| mTLS | Verified client certificate mapped by SHA-256 fingerprint | `[tls]` with `client_ca` and `identities` |
-
-The Flight username/password exchange is deliberately the standard ADBC-compatible flow, not a
-SCRAM exchange. Never use it over an untrusted plaintext transport. Server-issued Flight bearer
-sessions have a built-in 24-hour maximum lifetime and are also invalidated when the listener stops
-or the client closes its Flight SQL session. Standard ADBC clients reconnect and repeat the
-username/password handshake after that maximum is reached.
-
-### Use the helper
-
-The dependency-free PEP 723 script performs atomic mode-`0600` updates and validates the complete
-file:
-
-```sh
-uv run scripts/duckflight_auth.py user add alice --file duckflight.toml
-uv run scripts/duckflight_auth.py user list --file duckflight.toml
-uv run scripts/duckflight_auth.py user test alice --file duckflight.toml
-
-uv run scripts/duckflight_auth.py token add airport --file duckflight.toml
-uv run scripts/duckflight_auth.py token list --file duckflight.toml
-uv run scripts/duckflight_auth.py token test airport --file duckflight.toml
-
-uv run scripts/duckflight_auth.py check --file duckflight.toml
-uv run scripts/duckflight_auth.py tls --file duckflight.toml
-```
-
-Password and token verification prompts do not put credentials in process arguments. `token add`
-prints the new raw token once as `token=...`; copy it directly into the client secret manager. Only
-its SHA-256 digest is written to `duckflight.toml`. `--replace` rotates an existing user or token.
-Generated tokens grant `query:execute` and `transaction:manage` by default. Airport and ADBC create
-a Flight SQL transaction even for reads, so both scopes are required for their least-privilege read
-path. This still denies query mutation, ingestion, and administrative SQL. Grant additional
-permissions with repeated `--scope`, or use the explicit `--full-access` switch when the client
-genuinely needs the complete set. See [Authorization scopes](#authorization-scopes) for the values.
-
-### Configuration schema
-
-A complete configuration can contain all three sections:
-
-```toml
-[users.alice]
-password_hash = "<64 lowercase hexadecimal characters>"
-salt = [<16 decimal byte values from 0 through 255>]
-iterations = 10000
-
-[tokens.airport]
-sha256 = "<64 lowercase hexadecimal characters>"
-subject = "airport"
-scopes = [
-  "query:execute",
-  "transaction:manage",
-]
-
-[tls]
-cert = "server.crt"
-key = "server.key"
-```
-
-Relative certificate paths are resolved relative to `duckflight.toml`, not the process working
-directory. The same certificate and private key are used for both PgWire and Flight; the protocols
-negotiate independently over their respective ports.
-
-The angle-bracket values above describe the schema and are not usable credentials. Quote names that
-are not valid bare TOML keys.
-
-#### Authorization scopes
-
-Use these case-sensitive values in `[tokens.<name>]`, `[tls.identities.<fingerprint>]`,
-and `[[authorization.rules]]` for OIDC.
-
-| Scope | Permission |
-| --- | --- |
-| `query:execute` | Run read-only SQL such as `SELECT` and access query metadata. |
-| `query:mutate` | Run SQL that changes data or schema, such as `INSERT`, `UPDATE`, and `CREATE TABLE`. |
-| `query:ingest` | Use the HTTP Arrow IPC and Flight SQL bulk ingestion APIs. |
-| `transaction:manage` | Begin, commit, and roll back transactions through the HTTP and Flight SQL transaction APIs. |
-| `query:admin` | Run extension-management SQL such as `INSTALL` and `LOAD` where the listener permits it. HTTP and PgWire reject these commands regardless of scope. |
-
-List each permission the client needs. For example, a client that reads and
-writes over Flight SQL should include both `query:execute` and `query:mutate`.
-When `scopes` is omitted from a static token or mTLS identity, it defaults to
-`["query:execute", "transaction:manage"]`. OIDC identities receive the scopes
-from all matching rules and start with an empty grant.
-
-#### Users
-
-`password_hash` is the 32-byte value produced by
-`PBKDF2-HMAC-SHA256(password, salt, iterations, output_length=32)`. Store that derived value, never a
-plaintext password. All users in one file must use the same iteration count. DuckFlight requires at
-least 4,096 iterations and the helper generates 10,000 by default.
-
-Possession of the verifier and salt permits offline password guessing. Prefer strong unique
-passwords even though plaintext passwords are never stored.
-
-#### Bearer tokens
-
-Each token entry stores a SHA-256 digest, an audit subject, and authorization scopes. Tokens
-generated by the helper contain 256 bits of randomness, so a direct digest is appropriate; do not
-put a human-chosen password in a token entry. The raw token belongs only in the client secret
-manager.
-
-Airport sends a preconfigured bearer and does not perform the ADBC username/password handshake. To
-connect Airport, generate a token, start the Flight listener, then store the raw value with the
-Airport secret type:
-
-```sql
-create secret duckflight_airport (
-  type airport,
-  scope 'grpc+tls://flight.example.com:31337',
-  auth_token 'the-token-printed-by-token-add'
-);
-
-attach 'grpc+tls://flight.example.com:31337' as remote (type airport);
-select * from remote.public.example limit 10;
-```
-
-Use a temporary DuckDB secret or a suitably protected persistent secret store. Do not inline the
-token in `attach`, application logs, or checked-in SQL. Airport's current authentication interface is
-documented by [Query.Farm](https://query.farm/products/extensions/airport/).
-
-#### OIDC providers and authorization
-
-Add one `[[oidc]]` entry per provider. Each issuer must be unique. The runtime verifies
-signatures against cached JWKS, refreshes unknown key IDs, and checks issuer, audience,
-expiry, and configured claim restrictions. It supports RS256 and ES256. Use an explicit
-`jwks_url`, an explicit `discovery_url`, or issuer discovery. `jwks` can instead contain
-an inline public JWK set. HTTPS is required; `allow_http = true` is for local test providers.
-
-```toml
-[[oidc]]
-name = "company"
-issuer = "https://identity.example.com"
-audience = "duckflight"
-jwks_url = "https://identity.example.com/.well-known/jwks.json"
-algorithms = ["RS256"]
-
-[[authorization.rules]]
-provider = "oidc:company"
-group = "analytics"
-scopes = ["query:execute", "transaction:manage"]
-```
-
-Every rule must name a configured `oidc:<name>`. Optional `subject`, `group`, and
-`tenant` selectors must all match. Matching rules add their scopes; an identity with no
-matching rule receives no local query privileges. Provider `scope` and `roles` claims do
-not directly grant DuckFlight privileges. See [Authorization scopes](#authorization-scopes)
-for the local values.
-
-Flight clients send the provider's access token in `authorization: Bearer <token>` on
-each RPC. PgWire clients supporting SASL OAUTHBEARER can use the same providers.
-OIDC does not remove the TLS requirement outside loopback. Existing users, static Flight
-tokens, and mTLS identity mappings can coexist with OIDC. Process authentication environment
-variables are not merged into this file. The helper checks key structure and usable signing-key
-selection and preserves these tables when changing users or static tokens. Cryptographic key
-validation and provider availability remain runtime checks; the helper does not acquire tokens.
-
-The Flight listener serves standard `grpc.health.v1.Health` Check and Watch RPCs for
-both the empty service name and `arrow.flight.protocol.FlightService`. These probes
-require no bearer token, use the listener's TLS/client-certificate transport policy,
-and expose only readiness. They become serving after listener initialization and
-not-serving when stopping. Unknown service names return the standard health response.
-
-#### Flight session limits and listener shutdown
-
-Put the shutdown option before any TOML table header. Explicit values override the
-corresponding environment defaults; omitted options retain those defaults.
-
-```toml
-shutdown_grace_secs = 30
-
-[flight]
-max_sessions = 10000
-session_timeout_ms = 0
-transaction_timeout_ms = 0
-query_timeout_ms = 0
-```
-
-`max_sessions` must be positive. Session and transaction timeouts are idle limits;
-`query_timeout_ms` is the execution deadline. Zero disables each timeout. A session can
-override its query deadline through the Flight `query_timeout` option or SQL
-`set query_timeout = '5s'`; `reset query_timeout` restores the server default.
-Shutdown rejects new work while allowing admitted queries and result fetches to finish
-within the grace period, then interrupts outstanding execution. Zero grace forces immediate
-shutdown. Stopping one listener leaves other listeners running.
-
-#### PostgreSQL cross-catalog reads
-
-A PostgreSQL session follows PostgreSQL's rule against cross-database references: an
-explicit catalog other than the connected database fails with SQLSTATE `3D000`. A
-PostgreSQL listener can opt in to reading other attached catalogs:
-
-```toml
-[pgwire]
-cross_catalog_reads = true
-```
-
-With the setting on, a read-only `SELECT` (including joins, subqueries, CTEs and set
-operations) may name `catalog.schema.relation` in any attached, non-internal catalog, the
-same set a client can select as its startup database. Two-part and unqualified names still
-resolve in the connected database. Writes, DDL, writable CTEs, `COPY`, `EXPLAIN`, and
-functions or types qualified with another catalog keep the default rule, and catalog
-metadata still describes only the connected database. The setting requires DuckFlight
-0.1.18 or newer: earlier versions reject a config file that contains a `[pgwire]` table.
-
-#### Optional mTLS
-
-mTLS is an advanced alternative for deployments that manage client certificates:
-
-```toml
-[tls]
-cert = "server.crt"
-key = "server.key"
-client_ca = "client-ca.crt"
-client_cert_mode = "required"
-
-[tls.identities."sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]
-subject = "reporting-service"
-scopes = ["query:execute"]
-```
-
-When `client_ca` is configured, identity mappings are mandatory and client certificates are required
-by default. Set `client_cert_mode = "optional"` only for an intentional mixed deployment where
-other clients authenticate using passwords or bearer tokens. A request presenting both a client
-certificate and bearer token is rejected as ambiguous.
-
-### Treat the file as credential material
-
-- Never commit it, attach it to a GitHub Release, include it in CI artifacts, or bake it into an
-  image. This repository ignores `/duckflight.toml` and the legacy `/users.toml` name.
-- Store production copies in a secret manager and provision them only at deployment time. Keep
-  development, staging, and production files separate.
-- Limit ownership to the account running DuckDB. Use mode `0600` on Unix and an equivalent
-  account-only ACL on Windows. Protect parent directories, backups, certificate private keys, and
-  the client secret store too.
-- Mount the deployed copy read-only where possible. Run the helper against a writable administrative
-  copy, validate it, then publish a new secret-manager version.
-- Restart the affected listener after changing the file; listeners load a consistent snapshot at
-  startup rather than watching for partial changes.
-- Do not print the file, password hashes, salts, token hashes, raw tokens, or plaintext passwords in
-  logs, tickets, terminal recordings, or support bundles.
-
-If the file is exposed, rotate every password verifier with new salts and passwords and rotate every
-bearer token. If only a raw bearer token is exposed, replace that token entry and update its client
-secret. Stop/restart the listener to invalidate locally issued Flight sessions immediately.
-
-Starting, listing, and stopping listeners requires ordinary SQL access to the loaded extension. On a
-host that accepts untrusted SQL, isolate each tenant in a separate DuckDB process and control whether
-the extension is installed or loaded. Listener authentication is not a substitute for process
-isolation or SQL authorization inside the host DuckDB process.
-
-## SQL access controls
-
-Give an analyst access to selected columns, show support staff a masked account number,
-or restrict each tenant to its own rows. Administrators manage these permissions with SQL
-over a PgWire or Flight SQL connection. Roles and grants persist in a private DuckDB file.
-
-Built-in enforcement requires DuckDB **2.0.1** and the unified DuckFlight extension build.
-The signed 2.0.0 builds listed above predate this feature. To enable it, add an `[acl]`
-section to the listener's authentication file and identify the initial administrator.
-
-Follow the [access control guide](docs/ACCESS_CONTROL.md) to start a managed listener,
-grant a reader access, check what they see, and revoke the grant from their live session.
-
-## Observability
-
-The extension supports optional OTLP traces, metrics, query-completion logs, and sampled
-DuckDB execution profiles for both listeners. Set configuration before `load duckflight`:
-
-```sh
-export DUCKFLIGHT_TELEMETRY_ENABLED=true
-export DUCKFLIGHT_OTLP_PROTOCOL=http/protobuf
-export DUCKFLIGHT_OTLP_ENDPOINT=http://127.0.0.1:4318
-export DUCKFLIGHT_PROFILE_MODE=detailed
-export DUCKFLIGHT_PROFILE_SAMPLE_RATIO=0.05
-```
-
-Both features are off by default. See [observability configuration](docs/OBSERVABILITY.md)
-for signal controls, sampling, resource identity, profile limits, and measurement boundaries.
-
-## Build and test
-
-The repository follows DuckDB's Rust Community Extension template and pins
-`extension-ci-tools` as a submodule. Clone with submodules, then run:
-
-```sh
-git submodule update --init --recursive
-make configure
-make debug
-make test_debug
-```
-
-`make test_debug` builds an open mock runtime and points `DUCKFLIGHT_CORE_PATH` at it. The mock exists
-only to test the public ABI and SQL lifecycle deterministically; it does not implement a database
-server. Unit and lint checks are:
-
-```sh
-cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
-
-The distribution workflow uses DuckDB's reusable build, test, metadata, and packaging matrix for
-DuckDB 2.0 at final pin `d54cbbe3df`, initially labeled `v2.0.0-alpha44357`.
-The extension uses the stable v1 C API (`v1.5.6`); that metadata version identifies the API,
-while the bundled native core must match the DuckDB host release.
-Generated shared libraries, build trees, and `.duckdb_extension` artifacts are ignored
-and must not be committed.
-
-The initial Community release supports Linux and macOS on amd64 and arm64. Windows, WebAssembly,
-and Linux musl are explicitly excluded until matching bundled core payloads pass the same release
-smoke test; unsupported platforms never fall back to a source checkout or runtime download.
-
-An authorized release build embeds the private core directly into the extension:
-
-```sh
-./scripts/build-bundled.sh /path/to/private/duckflight
-```
-
-See [docs/BUNDLED_CORE.md](docs/BUNDLED_CORE.md) for the local build and per-platform GitHub Release
-asset model. The current payloads and their checksums are pinned in `core-assets.lock`.
-
-<details>
-<summary>Developing without a bundled core</summary>
-
-Production extensions are self-contained. For public-source development and CI, an unbundled build
-can instead load an ABI-compatible core from `DUCKFLIGHT_CORE_PATH`:
-
-```sh
-export DUCKFLIGHT_CORE_PATH=/absolute/path/to/libduckflight_core_ffi.dylib
-duckdb
-```
-
-Use `.so` on Linux. Without a compatible core, `LOAD duckflight` still permits metadata inspection
-while server operations return an availability error. Inspect the state with
-`select * from duckflight_core_status();`.
-
-</details>
+Every listener takes the path to one `duckflight.toml` file holding users, bearer tokens, and the
+TLS identity. A listener with no credentials configured will not start, and a listener on a
+non-loopback address will not start without TLS. The full guide is in
+[Authentication](docs/AUTHENTICATION.md).
+
+## SQL API
+
+Seven table functions control the servers: `duckflight_pg_serve`, `duckflight_flight_serve`,
+`duckflight_http_serve`, `duckflight_quack_serve`, `duckflight_servers`, `duckflight_stop`, and
+`duckflight_core_status`. Their arguments and results, along with the PostgreSQL compatibility
+helpers, are in the [SQL reference](docs/SQL_FUNCTIONS.md).
 
 ## Security
 
-The bundled core executes native code in the DuckDB process. Release inputs must be immutable and
-checksum-verified. SQL callers are trusted to manage DuckFlight listeners, just as they are trusted
-to operate the DuckDB instance. The core rejects non-loopback listeners without TLS and rejects
-listeners with no authentication method. See [SECURITY.md](SECURITY.md) for reporting guidance.
+DuckFlight's core runs as native code inside the DuckDB process. Anyone who can run SQL in that
+process can start, list and stop listeners, so treat host SQL access as administrative access.
+Report vulnerabilities through [SECURITY.md](SECURITY.md).
 
 ## License
 
