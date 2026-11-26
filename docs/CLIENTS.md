@@ -6,7 +6,7 @@ the relevant listener. The examples assume the loopback setup from the
 that need one:
 
 ```sh doctest
-uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.20/scripts/duckflight_auth.py token add demo
+uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.21/scripts/duckflight_auth.py token add demo
 ```
 
 The command prints `token=...` once. Only its hash is stored, so copy the value now. The examples
@@ -239,7 +239,7 @@ same credentials as HTTP.
 even if you only read through it. Create one and put it in `DUCKFLIGHT_TOKEN`:
 
 ```sh doctest
-uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.20/scripts/duckflight_auth.py token add duckdb \
+uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.21/scripts/duckflight_auth.py token add duckdb \
   --scope query:execute --scope query:mutate --scope transaction:manage
 ```
 

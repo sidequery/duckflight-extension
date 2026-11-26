@@ -15,7 +15,7 @@ file with one user. The helper prompts for a password and writes `duckflight.tom
 directory.
 
 ```sh doctest
-uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.20/scripts/duckflight_auth.py user add alice
+uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.21/scripts/duckflight_auth.py user add alice
 ```
 
 **2. Start a PostgreSQL listener.** Run `duckdb` in the same directory and leave it open; the

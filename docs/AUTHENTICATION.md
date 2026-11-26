@@ -52,7 +52,7 @@ writes atomically with mode `0600`, and never takes a credential as a command-li
 straight from a release tag with [uv](https://docs.astral.sh/uv/):
 
 ```sh
-alias duckflight-auth='uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.20/scripts/duckflight_auth.py'
+alias duckflight-auth='uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.21/scripts/duckflight_auth.py'
 ```
 
 From a checkout of this repository, `uv run scripts/duckflight_auth.py` is the same program.
