@@ -92,10 +92,11 @@ select users, tokens, oidc_providers, tls, acl from duckflight_config_check('wit
 ----
 2	1	0	true	false
 
-statement error
-select * from duckflight_config_check('');
+# Without a file, the default configuration and the default store are described.
+query IIIIIT
+select users, tokens, oidc_providers, tls, acl, store_path from duckflight_config_check('');
 ----
-config file path is required
+0	0	0	false	false	.duckflight/store.duckdb
 
 query TT
 select * from duckflight_token_create('duckflight.toml', 'ci');

@@ -175,7 +175,8 @@ pub struct DuckflightConfigSummaryV1 {
     pub oidc_providers: u64,
 }
 
-/// Validates the config file at `path` as a listener would when it starts.
+/// Validates the config file at `path` as a listener would when it starts. An empty `path` checks
+/// the default configuration and describes the default account store, without creating it.
 pub type DuckflightCoreConfigCheckV1 = unsafe extern "C" fn(
     handle: DuckflightCoreHandle,
     path: DuckflightBytesV1,
@@ -260,8 +261,9 @@ impl DuckflightConfigStoreSummaryV1 {
 /// Receives the user created by `init` or `user_add`. `user` is UTF-8. `password` is the
 /// generated password as UTF-8 when `has_password` is true; when the password came from a
 /// password file, `has_password` is false and `password` is empty (SQL NULL). Both are borrowed
-/// for the duration of the call only. Called once, after the user was committed; a non-OK status
-/// is returned by the operation unchanged, but the user remains.
+/// for the duration of the call only. Called once, after the user was committed. A non-OK status
+/// is returned by the operation unchanged, and the user is dropped again unless the store changed
+/// in the meantime; the error output says which.
 pub type DuckflightCreatedUserVisitorV1 = unsafe extern "C" fn(
     context: *mut c_void,
     user: DuckflightBytesV1,
@@ -271,7 +273,9 @@ pub type DuckflightCreatedUserVisitorV1 = unsafe extern "C" fn(
 
 /// Receives the token created by `token_add`: its user, its name and the token, each UTF-8 and
 /// borrowed for the duration of the call only. Called once, after the token was committed; this
-/// is the only time the token is available.
+/// is the only time the token is available. A non-OK status is returned by the operation
+/// unchanged, and the token is dropped again unless the store changed in the meantime; the error
+/// output says which.
 pub type DuckflightCreatedTokenVisitorV1 = unsafe extern "C" fn(
     context: *mut c_void,
     user: DuckflightBytesV1,

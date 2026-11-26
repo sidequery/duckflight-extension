@@ -293,10 +293,13 @@ unsafe extern "C" fn config_check(
         with_error_boundary(error, || {
             let core = handle_ref(handle)?;
             let path = borrowed_str(path, "path")?;
-            if path.is_empty() {
+            // A core with the account store checks the default configuration for an empty path.
+            let has_file = !path.is_empty();
+            if has_file {
+                read_config(path)?;
+            } else if mode() == Mode::BeforeAccountStore {
                 return Err("a DuckFlight config file path is required".into());
             }
-            read_config(path)?;
             if out_summary.is_null()
                 || ((*out_summary).struct_size as usize) < size_of::<DuckflightConfigSummaryV1>()
             {
@@ -315,8 +318,8 @@ unsafe extern "C" fn config_check(
                 struct_size: filled as u32,
                 tls: path.contains("tls"),
                 acl: false,
-                users: 2,
-                tokens: 1,
+                users: if has_file { 2 } else { 0 },
+                tokens: if has_file { 1 } else { 0 },
                 oidc_providers: 0,
             };
             if !extended {
@@ -332,8 +335,8 @@ unsafe extern "C" fn config_check(
             (*out).store_exists = initialized;
             (*out).store_initialized = initialized;
             (*out).store_users = users;
-            (*out).ignored_users = if initialized { 2 } else { 0 };
-            (*out).ignored_tokens = if initialized { 1 } else { 0 };
+            (*out).ignored_users = if initialized && has_file { 2 } else { 0 };
+            (*out).ignored_tokens = if initialized && has_file { 1 } else { 0 };
             Ok(write_output(
                 ptr::addr_of_mut!((*out).store_path),
                 &store_path(path),
