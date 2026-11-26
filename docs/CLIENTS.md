@@ -2,37 +2,38 @@
 
 Every example below talks to the same host: a DuckDB session that has loaded DuckFlight and started
 the relevant listener. The examples assume the loopback setup from the
-[quickstart](../README.md#quickstart), with a user `alice`, plus a bearer token for the protocols
-that need one:
+[quickstart](../README.md#quickstart), with the administrator `alice`, plus a bearer token of
+`alice` for the protocols that need one. Create the token in the DuckDB session:
 
-```sh doctest
-uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.21/scripts/duckflight_auth.py token add demo
+```sql doctest=host
+select * from duckflight_token_add('alice', 'demo');
 ```
 
-The command prints `token=...` once. Only its hash is stored, so copy the value now. The examples
-read credentials from the environment so that nothing secret is pasted into code:
+The `token` column is shown once. Only its hash is stored, so copy the value now. An administrator
+connected over `psql` can do the same with `create token demo for user alice;`. The examples read
+credentials from the environment so that nothing secret is pasted into code:
 
 ```sh
-export DUCKFLIGHT_PASSWORD='the password you chose for alice'
-export DUCKFLIGHT_TOKEN='the token printed above'
+export DUCKFLIGHT_PASSWORD='the password duckflight_init returned for alice'
+export DUCKFLIGHT_TOKEN='the token returned above'
 ```
 
 ```sql doctest=host
 create table if not exists trips as
     select * from (values (1, 'Lisbon'), (2, 'Osaka')) t(id, city);
 
-select * from duckflight_pg_serve('127.0.0.1:5433', 'duckflight.toml');
-select * from duckflight_flight_serve('127.0.0.1:31337', 'duckflight.toml');
-select * from duckflight_http_serve('127.0.0.1:4080', 'duckflight.toml');
+select * from duckflight_pg_serve('127.0.0.1:5433', '');
+select * from duckflight_flight_serve('127.0.0.1:31337', '');
+select * from duckflight_http_serve('127.0.0.1:4080', '');
 ```
 
-Listeners read the config file when they start. After adding a user or token, stop and restart the
-listener that should see it.
+Listeners look accounts up at every login, so users and tokens created while they run work at once.
+A token acts with its user's role; `alice` is an administrator, so her token can read and write.
 
 | Protocol | Credential | Loopback URL | With TLS |
 | --- | --- | --- | --- |
-| PostgreSQL | User and password | `postgresql://alice@127.0.0.1:5433/memory` | add `sslmode=verify-full` |
-| Flight SQL | User and password, or bearer token | `grpc://127.0.0.1:31337` | `grpc+tls://host:31337` |
+| PostgreSQL | Password | `postgresql://alice@127.0.0.1:5433/memory` | add `sslmode=verify-full` |
+| Flight SQL | Password or bearer token | `grpc://127.0.0.1:31337` | `grpc+tls://host:31337` |
 | HTTP | Bearer token | `http://127.0.0.1:4080` | `https://host:4080` |
 | Quack | Bearer token | `quack:127.0.0.1:4081` | `quack:host:4081` |
 
@@ -69,6 +70,10 @@ with psycopg.connect(
 ) as conn:
     print(conn.execute("select * from trips order by id").fetchall())
 ```
+
+Psycopg opens a transaction before the first statement.
+[Account statements](AUTHENTICATION.md#manage-accounts-with-sql) such as `create user` cannot run
+inside one, so pass `autocommit=True` to `psycopg.connect` for them.
 
 ### SQLAlchemy
 
@@ -147,9 +152,9 @@ with flightsql.connect(
     print(cur.fetch_arrow_table())
 ```
 
-A token created with the helper's defaults can read but not write: an `insert` fails with
-`Capability does not grant required scope: query:mutate`. Grant more with `--scope`; see
-[authorization scopes](AUTHENTICATION.md#authorization-scopes).
+A token has its user's [role](AUTHENTICATION.md#roles). A `reader`'s token can read but not write:
+an `insert` fails with `Capability does not grant required scope: query:mutate`. To let it write,
+give the user the `writer` role with `alter user <name> set role writer`.
 
 ### TLS
 
@@ -181,7 +186,7 @@ bearer token on every call and does not perform the username/password handshake.
 create secret duckflight_airport (
   type airport,
   scope 'grpc+tls://flight.example.com:31337',
-  auth_token 'the-token-printed-by-token-add'
+  auth_token 'the-token-returned-by-create-token'
 );
 
 attach 'grpc+tls://flight.example.com:31337' as remote (type airport);
@@ -190,8 +195,7 @@ select * from remote.public.example limit 10;
 
 Use a temporary DuckDB secret or a suitably protected persistent secret store. Do not inline the
 token in `attach`, application logs, or checked-in SQL. Airport opens a Flight SQL transaction even
-for reads, so its token needs both `query:execute` and `transaction:manage`, which are the helper's
-defaults.
+for reads, which every role allows.
 
 Install Airport as its own documentation describes. On DuckDB 2.0 it is distributed from
 Query.Farm's extension repository rather than DuckDB Community.
@@ -199,8 +203,7 @@ Query.Farm's extension repository rather than DuckDB Community.
 ## HTTP
 
 The HTTP listener takes JSON requests and returns results as an Arrow IPC stream. It accepts bearer
-tokens, OIDC tokens and mTLS identities, but not PostgreSQL users: a config with only `[users.*]`
-cannot serve HTTP.
+tokens, OIDC tokens and mTLS identities, but not passwords.
 
 ```sh doctest
 curl -sS --fail http://127.0.0.1:4080/streaming-query \
@@ -219,15 +222,18 @@ import pyarrow.ipc
 print(pyarrow.ipc.open_stream(open("trips.arrow", "rb")).read_all())
 ```
 
-| Endpoint | Purpose | Scope needed |
+| Endpoint | Purpose | Lowest role |
 | --- | --- | --- |
-| `POST /streaming-query` | Run a read-only query: `{"query": "..."}` | `query:execute` |
-| `POST /streaming-mutate` | Run a statement that changes data: `{"operation": "insert", "statement": "...", "txId": "..."}` | `query:mutate` |
-| `POST /streaming-ingest` | Bulk-load Arrow data | `query:ingest` |
-| `POST /tx/begin` | Open a transaction; returns `{"tx_id": "..."}` | `transaction:manage` |
-| `POST /tx/end` | Commit or roll back a transaction | `transaction:manage` |
+| `POST /streaming-query` | Run a read-only query: `{"query": "..."}` | `reader` |
+| `POST /streaming-mutate` | Run a statement that changes data: `{"operation": "insert", "statement": "...", "txId": "..."}` | `writer` |
+| `POST /streaming-ingest` | Bulk-load Arrow data | `writer` |
+| `POST /tx/begin` | Open a transaction; returns `{"tx_id": "..."}` | `reader` |
+| `POST /tx/end` | Commit or roll back a transaction | `reader` |
 
-A missing or wrong token returns `401`. A token without the needed scope returns `403`.
+A missing or wrong token returns `401`. A token whose role does not allow the request returns
+`403`. An administrator's token can also send
+[account statements](AUTHENTICATION.md#manage-accounts-with-sql) such as `create user carol` to
+`/streaming-query`.
 
 ## Quack (DuckDB to DuckDB)
 
@@ -235,18 +241,12 @@ Quack is DuckDB's own client/server protocol. A second DuckDB instance connects 
 `quack` extension, so results stay in DuckDB's native format end to end. The listener accepts the
 same credentials as HTTP.
 
-A read-only token is enough for `quack_query` and for reading through an attached catalog.
-Writing needs `query:mutate`. Create a token that can write and put it in `DUCKFLIGHT_TOKEN`:
-
-```sh doctest
-uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.21/scripts/duckflight_auth.py token add duckdb \
-  --scope query:execute --scope query:mutate --scope transaction:manage
-```
-
-Then start the listener on the host, so that it reads the new token:
+A `reader`'s token is enough for `quack_query` and for reading through an attached catalog.
+Writing needs a `writer` or `admin` token, such as `alice`'s from above. Start the listener on the
+host:
 
 ```sql doctest=host
-select * from duckflight_quack_serve('127.0.0.1:4081', 'duckflight.toml');
+select * from duckflight_quack_serve('127.0.0.1:4081', '');
 ```
 
 From another DuckDB, run a single query:

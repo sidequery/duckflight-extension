@@ -22,6 +22,11 @@ release exactly, so the DuckFlight version you receive depends on the DuckDB you
 From 0.1.21, one file per platform serves both DuckDB 2.0.0 and 2.0.1.
 [SQL access controls](ACCESS_CONTROL.md) need DuckDB 2.0.1.
 
+The [account store](AUTHENTICATION.md#the-account-store), which the quickstart and guides use for
+users and tokens, needs DuckFlight 0.2.0 or later. Earlier builds, including 0.1.12 for DuckDB
+1.5.6 and the Docker image, read users and tokens from
+[`duckflight.toml`](CONFIGURATION.md#legacy-users-and-tokens) instead.
+
 Supported platforms are Linux and macOS on amd64 and arm64 (`linux_amd64`, `linux_arm64`,
 `osx_amd64`, `osx_arm64`). Windows, WebAssembly and Linux musl are not supported.
 
@@ -115,5 +120,5 @@ DuckLake workers on Kubernetes, use the [Helm chart](../charts/duckflight/README
 
 ## Next
 
-Create credentials and start a listener by following the
+Create the first administrator and start a listener by following the
 [quickstart](../README.md#quickstart), then connect a [client](CLIENTS.md).

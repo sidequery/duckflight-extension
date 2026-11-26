@@ -8,18 +8,11 @@ to export or copy: every client reads and writes the database that loaded the ex
 ## Quickstart
 
 This takes about five minutes and stays on your own machine. You need DuckDB 2.0 on Linux or macOS
-and [uv](https://docs.astral.sh/uv/) to run the credential helper.
+and DuckFlight 0.2.0 or later.
 
-**1. Create a user.** Listeners never run without authentication, so start by creating a config
-file with one user. The helper prompts for a password and writes `duckflight.toml` in the current
-directory.
-
-```sh doctest
-uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.21/scripts/duckflight_auth.py user add alice
-```
-
-**2. Start a PostgreSQL listener.** Run `duckdb` in the same directory and leave it open; the
-server lives inside this process.
+**1. Create an administrator.** Listeners never run without authentication. Run `duckdb` and leave
+it open; the server lives inside this process. Load DuckFlight, create a table to query, and create
+the first user:
 
 ```sql doctest=host
 install duckflight from community;
@@ -27,14 +20,25 @@ load duckflight;
 
 create table trips as select * from (values (1, 'Lisbon'), (2, 'Osaka')) t(id, city);
 
-select * from duckflight_pg_serve('127.0.0.1:5433', 'duckflight.toml');
+select * from duckflight_init('alice');
+```
+
+`duckflight_init` returns `alice`'s generated password. It is shown only this once, so copy it now.
+`alice` has the `admin` role. DuckFlight keeps accounts in a private store beside the database,
+here `.duckflight/store.duckdb` in the current directory; see
+[Authentication](docs/AUTHENTICATION.md#the-account-store).
+
+**2. Start a PostgreSQL listener.** There is no config file yet, so the second argument is `''`:
+
+```sql doctest=host
+select * from duckflight_pg_serve('127.0.0.1:5433', '');
 ```
 
 The function returns one row with the protocol and bound address once the listener is accepting
 connections.
 
-**3. Connect.** From a second terminal, use any PostgreSQL client. `memory` is the name of DuckDB's
-in-memory database.
+**3. Connect.** From a second terminal, use any PostgreSQL client and enter `alice`'s password.
+`memory` is the name of DuckDB's in-memory database.
 
 ```sh
 psql "host=127.0.0.1 port=5433 user=alice dbname=memory"
@@ -45,14 +49,27 @@ select * from trips;
 insert into trips values (3, 'Quito');
 ```
 
-The new row is immediately visible in the DuckDB session from step 2.
+The new row is immediately visible in the DuckDB session from step 1.
 
-**4. Stop.** In the DuckDB session:
+**4. Add a user.** Still in `psql` as `alice`:
+
+```sql doctest=pg
+create user bob role writer;
+```
+
+The result holds `bob`'s generated password, again shown once. `bob` can connect straight away;
+nothing needs restarting. `show users;` lists the accounts.
+
+**5. Stop.** In the DuckDB session:
 
 ```sql doctest=host
 select * from duckflight_servers();
 select * from duckflight_stop('pgwire', '127.0.0.1:5433');
 ```
+
+The account store stays in the directory. When you start DuckDB there again, `alice` and `bob`
+still exist, so leave out the `duckflight_init` line; the in-memory `trips` table is gone and needs
+creating again.
 
 Plaintext connections like this one are allowed on loopback addresses only. To accept connections
 from other machines, add a TLS certificate: see [Authentication](docs/AUTHENTICATION.md#tls).
@@ -63,8 +80,8 @@ All listeners serve the same database and can run at the same time.
 
 | Protocol | Start function | Clients | Credentials accepted |
 | --- | --- | --- | --- |
-| PostgreSQL wire | `duckflight_pg_serve` | `psql`, Psycopg, JDBC, SQLAlchemy, BI tools | Users, OIDC, mTLS |
-| Arrow Flight SQL | `duckflight_flight_serve` | ADBC drivers, DuckDB's Airport extension | Users, bearer tokens, OIDC, mTLS |
+| PostgreSQL wire | `duckflight_pg_serve` | `psql`, Psycopg, JDBC, SQLAlchemy, BI tools | Passwords, OIDC, mTLS |
+| Arrow Flight SQL | `duckflight_flight_serve` | ADBC drivers, DuckDB's Airport extension | Passwords, bearer tokens, OIDC, mTLS |
 | HTTP (Arrow IPC) | `duckflight_http_serve` | Anything that can `POST` JSON and read Arrow | Bearer tokens, OIDC, mTLS |
 | Quack | `duckflight_quack_serve` | Another DuckDB, through its `quack` extension | Bearer tokens, OIDC, mTLS |
 
@@ -96,7 +113,7 @@ select extension_version from duckdb_extensions() where extension_name = 'duckfl
 | --- | --- |
 | [Install](docs/INSTALL.md) | Install from Community, the Sidequery repository, or a release artifact |
 | [Clients](docs/CLIENTS.md) | Connect from `psql`, Python, ADBC, Airport, or HTTP |
-| [Authentication](docs/AUTHENTICATION.md) | Add users, tokens, TLS, OIDC or mTLS, and handle the config file safely |
+| [Authentication](docs/AUTHENTICATION.md) | Manage users, tokens and roles, or set up TLS, OIDC or mTLS |
 | [Configuration reference](docs/CONFIGURATION.md) | Look up a `duckflight.toml` key or environment variable |
 | [SQL reference](docs/SQL_FUNCTIONS.md) | Look up a server function, PostgreSQL helper, or session diagnostic |
 | [SQL access controls](docs/ACCESS_CONTROL.md) | Restrict roles to tables, columns, masked values or tenant rows |
@@ -105,25 +122,36 @@ select extension_version from duckdb_extensions() where extension_name = 'duckfl
 | [Observability](docs/OBSERVABILITY.md) | Export OTLP traces, metrics, logs and query profiles |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Decode an error message |
 
-## Authentication setup
+## Accounts
 
-Every listener takes the path to one `duckflight.toml` file holding users, bearer tokens, and the
-TLS identity. A listener with no credentials configured will not start, and a listener on a
-non-loopback address will not start without TLS. The full guide is in
-[Authentication](docs/AUTHENTICATION.md).
+Users, passwords and bearer tokens live in an account store that DuckFlight keeps beside the
+database. Each user has the role `reader`, `writer` or `admin`, and one account works on every
+listener: its password over PostgreSQL and Flight SQL, its tokens over Flight SQL, HTTP and Quack.
+Create the first administrator with `duckflight_init`; after that, an administrator manages
+accounts over any listener with SQL such as `CREATE USER`, `CREATE TOKEN` and `ALTER USER`, and
+changes apply at once.
+
+The optional `duckflight.toml` file holds listener settings only: TLS, OIDC providers, timeouts,
+the store's location, and access controls. A listener on a non-loopback address will not start
+without TLS. The full guide is in [Authentication](docs/AUTHENTICATION.md); upgrading from 0.1.x,
+where users and tokens lived in `duckflight.toml`, is covered
+[there too](docs/AUTHENTICATION.md#upgrading-from-01x).
 
 ## SQL API
 
 Seven table functions control the servers: `duckflight_pg_serve`, `duckflight_flight_serve`,
 `duckflight_http_serve`, `duckflight_quack_serve`, `duckflight_servers`, `duckflight_stop`, and
-`duckflight_core_status`. Three more create credentials: `duckflight_token_create`,
-`duckflight_user_create` and `duckflight_config_check`. Their arguments and results, along with the
-PostgreSQL compatibility helpers, are in the [SQL reference](docs/SQL_FUNCTIONS.md).
+`duckflight_core_status`. Six more set up accounts from the host: `duckflight_init`,
+`duckflight_user_add`, `duckflight_token_add`, `duckflight_accounts`, `duckflight_import` and
+`duckflight_config_check`. Apart from `duckflight_core_status`, these run only in the host
+process; a client connected through a listener cannot call them. Their arguments and results,
+along with the PostgreSQL compatibility helpers, are in the [SQL reference](docs/SQL_FUNCTIONS.md).
 
 ## Security
 
 DuckFlight's core runs as native code inside the DuckDB process. Anyone who can run SQL in that
-process can start, list and stop listeners, so treat host SQL access as administrative access.
+process can start, list and stop listeners and manage every account, so treat host SQL access as
+administrative access.
 Report vulnerabilities through [SECURITY.md](SECURITY.md).
 
 ## License

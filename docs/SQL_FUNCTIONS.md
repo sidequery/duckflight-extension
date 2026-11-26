@@ -3,8 +3,8 @@
 Loading DuckFlight adds four groups of SQL objects to the host database:
 
 - [Server functions](#server-functions) that start, list and stop listeners.
-- [Setup functions](#setup-functions) that manage accounts in the account store, or create
-  credentials in `duckflight.toml`.
+- [Setup functions](#setup-functions) that manage accounts in the account store, check a config
+  file, or create credentials in `duckflight.toml` for builds that predate the store.
 - [PostgreSQL compatibility helpers](#postgresql-compatibility-helpers) so PostgreSQL-flavoured
   queries and client tools work.
 - [Session diagnostics](#session-diagnostics) that describe connected PostgreSQL clients.
@@ -18,14 +18,18 @@ Starting, stopping and listing listeners is reserved for that process, and so ar
 [setup functions](#setup-functions). A client connected through a listener gets an error from
 these functions whatever its credentials allow; `duckflight_core_status()` stays available to it.
 
+A listener needs an account to authenticate, so this example creates the first administrator
+before starting listeners:
+
 ```sql doctest=host
 load duckflight;
 
 select * from duckflight_core_status();
-select * from duckflight_pg_serve('127.0.0.1:5433', 'duckflight.toml');
-select * from duckflight_flight_serve('127.0.0.1:31337', 'duckflight.toml');
-select * from duckflight_http_serve('127.0.0.1:4080', 'duckflight.toml');
-select * from duckflight_quack_serve('127.0.0.1:4081', 'duckflight.toml');
+select * from duckflight_init('alice');
+select * from duckflight_pg_serve('127.0.0.1:5433', '');
+select * from duckflight_flight_serve('127.0.0.1:31337', '');
+select * from duckflight_http_serve('127.0.0.1:4080', '');
+select * from duckflight_quack_serve('127.0.0.1:4081', '');
 select * from duckflight_servers();
 
 select * from duckflight_stop('pgwire', '127.0.0.1:5433');
@@ -51,17 +55,20 @@ is authoritative: use it to connect and to stop, including when a hostname resol
 address. A start function returns once its background listener is running.
 
 `config_file` is the path to [`duckflight.toml`](CONFIGURATION.md#duckflighttoml), or `''` for
-none. Without a file the listener authenticates against the host's
-[account store](#account-store), which needs a user first; see `duckflight_init`. The serve
-functions always take both arguments, so pass `''` rather than leaving it out:
+none. Either way the listener authenticates users and tokens against the host's
+[account store](#account-store), which needs a user first; see `duckflight_init`. The file adds
+TLS, OIDC, timeouts and the other [listener settings](CONFIGURATION.md). The serve functions
+always take both arguments, so pass `''` rather than leaving it out:
 
 ```sql
 select * from duckflight_pg_serve('127.0.0.1:5433', '');
 ```
 
 Every listener requires authentication, and a non-loopback address also requires TLS; see
-[Authentication](AUTHENTICATION.md). The HTTP and Quack listeners need a bearer token (in the file
-or the account store), an OIDC provider or an mTLS identity, because they do not accept passwords.
+[Authentication](AUTHENTICATION.md). A listener starts once the account store has a user, or when
+the file configures an OIDC provider, an mTLS identity, or
+[legacy users and tokens](CONFIGURATION.md#legacy-users-and-tokens). The HTTP and Quack
+listeners accept bearer tokens, OIDC and mTLS, but not passwords.
 
 DuckDB 1.5.6 builds provide the PostgreSQL and Flight SQL functions only.
 
@@ -86,6 +93,8 @@ How long a stopping listener waits for running queries is set by
 ## Setup functions
 
 These manage accounts from the DuckDB process that will serve them, with nothing else to install.
+Over a listener, an administrator uses [account SQL](AUTHENTICATION.md#manage-accounts-with-sql)
+instead.
 
 ### Account store
 
@@ -94,12 +103,21 @@ The account store holds password users and bearer tokens, each user with the rol
 the `[users]` and `[tokens]` of a config file are ignored. Listeners look accounts up at every
 login, so an account added while they run works at once.
 
-```sql
-select * from duckflight_init('alice');
+`duckflight_init`, shown [above](#server-functions), creates the store and its first
+administrator. Then:
+
+```sql doctest=host
 select * from duckflight_user_add('bob', role := 'writer');
-select * from duckflight_user_add('carol', password_file := 'carol.password');
 select * from duckflight_token_add('bob', 'nightly');
 select * from duckflight_accounts();
+```
+
+A password can come from a file instead of being generated, and a config file's legacy accounts
+can be imported:
+
+```sql
+select * from duckflight_init('alice', password_file := 'alice.password');
+select * from duckflight_user_add('carol', password_file := 'carol.password');
 select * from duckflight_import('duckflight.toml');
 ```
 
@@ -113,29 +131,53 @@ select * from duckflight_import('duckflight.toml');
 
 `duckflight_init` creates the store and its first user, with the `admin` role, and fails once the
 store has a user. `duckflight_user_add` and `duckflight_token_add` need an initialized store, and
-the token's user must exist. As with the config file functions below, DuckFlight generates each
-password and token and returns it once; with `password_file` the password is read from that file,
-without its final newline, and not returned.
+the token's user must exist. DuckFlight generates each password and token and returns it once, so
+it does not appear in the statement or in your DuckDB history; copy it straight into the client's
+secret manager. With `password_file` the password is read from that file, without its final
+newline, and not returned. A token takes its user's role.
 
 `duckflight_import` copies the `[users]` and `[tokens]` of a config file into the store in one
 all-or-nothing step and leaves the file unchanged. Each token joins the store user named by its
 `subject`. Entries already in the store with the same credential are skipped, so running it again
 changes nothing; `note` says what happened to each entry. Importing into an empty store needs an
-administrator in the file: a `[users]` entry or a token with the `query:admin` scope.
+administrator in the file: a `[users]` entry or a token with the `query:admin` scope. See
+[Upgrading from 0.1.x](AUTHENTICATION.md#upgrading-from-01x) for the roles imported accounts get.
 
 The store lives beside the host database: `<database>.duckflight/store.duckdb` for a database
 file, or `.duckflight/store.duckdb` in the working directory for an in-memory one. A config file
-can name another store path. `config_file` is needed only then, to select that store; leave it out
-otherwise. These functions read the file only to find the store, except `duckflight_import`.
+can name another store with [`[store]`](CONFIGURATION.md#store), or with `acl.store`.
+`config_file` is needed only then, to select that store; leave it out otherwise. A `config_file`
+that resolves to a different store than running listeners use is refused. These functions read
+the file only to find the store, except `duckflight_import`.
 
 With a DuckFlight core that predates the account store, each of these functions fails with an
 error saying the installed core does not support it.
 
 ### Config file
 
-These create credentials in [`duckflight.toml`](CONFIGURATION.md#duckflighttoml). They refuse once
-the account store that file resolves to is initialized, because the store would ignore what they
-add; use `duckflight_user_add` and `duckflight_token_add` instead.
+```sql
+select * from duckflight_config_check('duckflight.toml');
+```
+
+| Function | Arguments | Returned columns |
+| --- | --- | --- |
+| `duckflight_config_check(config_file)` | One varchar value | `users`, `tokens`, `oidc_providers` (unsigned bigint), `tls`, `acl` (boolean), `store_path` (varchar), `store_exists`, `store_initialized` (boolean), `store_users`, `ignored_users`, `ignored_tokens` (unsigned bigint) |
+
+`duckflight_config_check` validates a file the way a listener reads it when it starts and reports
+what it defines. It does not open the certificate files. The `store_` columns describe the account
+store the file resolves to: its path (for a DuckLake store, the catalog with any password
+redacted), whether it exists, whether it has a user, and how many users it has. `ignored_users`
+and `ignored_tokens` count the file's `[users]` and `[tokens]` entries that the initialized store
+makes ineffective; import them with `duckflight_import`. With a DuckFlight core that predates the
+account store these columns are null. The check needs a file: there is no form without one.
+
+### Config file credentials
+
+`duckflight_token_create` and `duckflight_user_create` write `[tokens]` and `[users]` entries
+into [`duckflight.toml`](CONFIGURATION.md#legacy-users-and-tokens). They are for builds and files
+from before the account store. They refuse once the account store that file resolves to is
+initialized, because the store would ignore what they add; use `duckflight_user_add` and
+`duckflight_token_add` instead.
 
 ```sql
 select * from duckflight_token_create('duckflight.toml', 'airport');
@@ -143,36 +185,23 @@ select * from duckflight_token_create('duckflight.toml', 'loader',
                                       scopes := 'query:execute,query:mutate,transaction:manage');
 select * from duckflight_user_create('duckflight.toml', 'alice');
 select * from duckflight_user_create('duckflight.toml', 'bob', password_file := 'bob.password');
-select * from duckflight_config_check('duckflight.toml');
 ```
 
 | Function | Arguments | Returned columns |
 | --- | --- | --- |
 | `duckflight_token_create(config_file, name)` | Two varchar values; optional `scopes` (comma-separated varchar) | `name`, `token` (varchar) |
 | `duckflight_user_create(config_file, name)` | Two varchar values; optional `password_file` (varchar) | `name`, `password` (varchar, null with `password_file`) |
-| `duckflight_config_check(config_file)` | One varchar value | `users`, `tokens`, `oidc_providers` (unsigned bigint), `tls`, `acl` (boolean), `store_path` (varchar), `store_exists`, `store_initialized` (boolean), `store_users`, `ignored_users`, `ignored_tokens` (unsigned bigint) |
 
-A secret is never an argument. DuckFlight generates the token or password and returns it once, so
-it does not appear in the statement or in your DuckDB history; the file stores only a SHA-256
-digest or a salted password verifier. Copy the returned value straight into the client's secret
-manager. To choose a password yourself, put it in a file readable only by you and pass
-`password_file`; nothing is returned then.
-
-Without `scopes` a token gets `query:execute` and `transaction:manage`. See
+As with the account store functions, a secret is never an argument: DuckFlight generates the token
+or password and returns it once, and the file stores only a SHA-256 digest or a salted password
+verifier. Without `scopes` a token gets `query:execute` and `transaction:manage`. See
 [Authorization scopes](AUTHENTICATION.md#authorization-scopes) for the full list.
 
 The functions create the file when it does not exist and otherwise append to it, leaving
 everything already there, comments included, unchanged. The result is validated before it replaces
 the file, which is written with mode `0600`. A name that already exists is an error: remove its
-table from the file to replace it. A running listener keeps the credentials it started with, so
-stop and start it to pick up a new one.
-
-`duckflight_config_check` validates a file the way a listener does when it starts and reports what
-it defines. The `store_` columns describe the account store the file resolves to: its path,
-whether it exists, whether it has a user, and how many users it has. `ignored_users` and
-`ignored_tokens` count the file's `[users]` and `[tokens]` entries that the initialized store makes
-ineffective; import them with `duckflight_import`. With a DuckFlight core that predates the
-account store these columns are null. The check needs a file: there is no form without one.
+table from the file to replace it. A running listener keeps the file credentials it started with,
+so stop and start it to pick up a new one.
 
 ### Status
 

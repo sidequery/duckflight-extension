@@ -1,32 +1,35 @@
 # Configuration reference
 
-DuckFlight is configured in three places:
+DuckFlight is configured in four places:
 
 | Where | What it controls | Read when |
 | --- | --- | --- |
-| [`duckflight.toml`](#duckflighttoml) | Credentials, TLS, authorization, session limits, access controls | Each listener starts |
+| The [account store](AUTHENTICATION.md#the-account-store) | Users, passwords, tokens and roles, managed with SQL | Every login and statement |
+| [`duckflight.toml`](#duckflighttoml) | TLS, OIDC, authorization rules, session limits, the store's location, access controls | Each listener starts |
 | [Telemetry environment variables](#telemetry-environment-variables) | OTLP export and query profiling | `load duckflight` |
 | [Container environment variables](#container-environment-variables) | Database path, bind addresses and resources for the Docker image | Container start |
 
 ## duckflight.toml
 
-The path is the second argument to every `duckflight_*_serve` function. Relative paths inside the
-file are resolved against the file's own directory. Unknown top-level keys are rejected.
+The path is the second argument to every `duckflight_*_serve` function. The file is optional: a
+listener on a loopback address that authenticates against the account store needs none, and takes
+`''` instead:
 
-A file using every section accepted by the published builds looks like this:
+```sql
+select * from duckflight_pg_serve('127.0.0.1:5433', '');
+```
+
+Relative paths inside the file are resolved against the file's own directory. Unknown top-level
+keys are rejected. Listeners read the file once when they start, so restart a listener after
+changing it. Accounts are not in this file and change without a restart.
+
+A file using most sections looks like this:
 
 ```toml
 shutdown_grace_secs = 30
 
-[users.alice]
-password_hash = "<64 lowercase hexadecimal characters>"
-salt = [<16 decimal byte values from 0 through 255>]
-iterations = 10000
-
-[tokens.airport]
-sha256 = "<64 lowercase hexadecimal characters>"
-subject = "airport"
-scopes = ["query:execute", "transaction:manage"]
+[store]
+path = "accounts/store.duckdb"
 
 [tls]
 cert = "server.crt"
@@ -50,9 +53,9 @@ query_timeout_ms = 0
 cross_catalog_reads = true
 ```
 
-The angle-bracket values describe the format and are not usable credentials; generate real entries
-with the [helper](AUTHENTICATION.md#the-helper). Quote names that are not valid bare TOML keys.
-Top-level keys such as `shutdown_grace_secs` must come before the first table header.
+Top-level keys such as `shutdown_grace_secs` must come before the first table header. To validate
+a file the way a listener reads it, run `select * from duckflight_config_check('duckflight.toml');`
+in the host; see the [SQL reference](SQL_FUNCTIONS.md#config-file).
 
 ### Top level
 
@@ -63,27 +66,25 @@ Top-level keys such as `shutdown_grace_secs` must come before the first table he
 Stopping rejects new work first, then waits out the grace period. Stopping one listener leaves the
 others running.
 
-### `[users.<name>]`
+### `[store]`
 
-PostgreSQL and Flight SQL password logins. See [Users](AUTHENTICATION.md#users).
-
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `password_hash` | 64 hex characters | PBKDF2-HMAC-SHA256 output, 32 bytes |
-| `salt` | array of 16 integers, 0 to 255 | Per-user salt |
-| `iterations` | integer, at least 4096 | PBKDF2 rounds; must be the same for every user in the file |
-
-### `[tokens.<name>]`
-
-Static bearer tokens for Flight SQL, HTTP and Quack. See
-[Bearer tokens](AUTHENTICATION.md#bearer-tokens).
+Where the [account store](AUTHENTICATION.md#the-account-store) lives. Without this table it is a
+file beside the served database. Give either `path` or `catalog`, not both. Requires DuckFlight
+0.2.0 or later.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `sha256` | 64 hex characters | Required | SHA-256 digest of the raw token |
-| `subject` | string | Token name | Identity recorded for auditing |
-| `scopes` | array of strings | `["query:execute", "transaction:manage"]` | [Authorization scopes](AUTHENTICATION.md#authorization-scopes) |
-| `tenant_id` | string | None | Tenant used by [row policies](ACCESS_CONTROL.md#mask-a-column-or-filter-by-tenant) |
+| `path` | path | Beside the database | A store file. Its directory must be private (mode `0700`) |
+| `catalog` | string | None | A DuckLake `ATTACH` target, such as `ducklake:sqlite:/srv/duckflight/store.sqlite`, for a store several servers share |
+| `data_path` | string | None | `catalog` only: where DuckLake writes data files. A relative local path is resolved against this file's directory |
+| `setup` | array of strings | None | `catalog` only: SQL run before the catalog is attached, such as `create secret` |
+| `refresh_ms` | integer, at most 60000 | `1000` | `catalog` only: for how many milliseconds a server may reuse its last read of the catalog when it checks an account. With `0`, every check queries the catalog |
+
+See [Share accounts with a DuckLake store](AUTHENTICATION.md#share-accounts-with-a-ducklake-store)
+for what to know before using `catalog`.
+
+All listeners in one DuckDB process must resolve to the same store. When this file names one, pass
+the file to the host setup functions as `config_file`.
 
 ### `[tls]`
 
@@ -100,13 +101,14 @@ One server identity shared by all listeners. Required for any non-loopback addre
 ### `[tls.identities."sha256:<fingerprint>"]`
 
 Maps a client certificate, by SHA-256 fingerprint, to an identity. Mandatory once `client_ca` is
-set.
+set. The identity's principal is `mtls~<subject>`, which account SQL can also
+[grant a role](AUTHENTICATION.md#oidc-and-mtls-identities).
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `subject` | string | Required | Identity recorded for auditing |
-| `scopes` | array of strings | `["query:execute", "transaction:manage"]` | Authorization scopes |
-| `tenant_id` | string | None | Tenant used by row policies |
+| `scopes` | array of strings | `["query:execute", "transaction:manage"]` | [Authorization scopes](AUTHENTICATION.md#authorization-scopes) |
+| `tenant_id` | string | None | Tenant used by [row policies](ACCESS_CONTROL.md#mask-a-column-or-filter-by-tenant) |
 
 ### `[[oidc]]`
 
@@ -124,7 +126,7 @@ One entry per identity provider. See [OIDC](AUTHENTICATION.md#oidc).
 | `algorithms` | array of strings | `["RS256"]` | Accepted algorithms: `RS256`, `ES256` |
 | `allow_http` | boolean | `false` | Permit `http://` provider URLs; local testing only |
 | `subject_claims` | array of strings | | Claims to read the subject from |
-| `groups_claim` | string | | Claim holding group membership, matched by rule `group` |
+| `groups_claim` | string | | Claim holding group membership, matched by rule `group` and by `GRANT ROLE ... TO GROUP` |
 | `tenant_claim` | string | | Claim holding the tenant, matched by rule `tenant` |
 | `roles_claim` | string | | Claim holding provider roles |
 | `access_token_type` | string | | Required token type |
@@ -136,7 +138,9 @@ documented here.
 
 ### `[[authorization.rules]]`
 
-Grants scopes to OIDC identities. An identity matching no rule can run nothing.
+Grants scopes to OIDC identities. Account SQL can grant them a
+[built-in role](AUTHENTICATION.md#oidc-and-mtls-identities) as well; the two add together. An
+identity matching no rule and holding no role can run nothing.
 
 | Key | Type | Meaning |
 | --- | --- | --- |
@@ -186,15 +190,54 @@ table with `Failed to parse DuckFlight config`.
 ```toml
 [acl]
 store = "roles.duckdb"
-admins = ["local~alice"]
+admins = ["local~ops"]
 ```
 
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `store` | path | DuckDB file holding roles and grants, created relative to the config file |
-| `admins` | array of strings | Principals allowed to issue grants, such as `local~alice` for the user `alice` |
+| `admins` | array of strings | Required. Principals allowed to issue grants, such as `local~ops` for the store user `ops` |
+
+Roles and accounts always live in one store. Without a `[store]` table, `acl.store` is also the
+[account store](AUTHENTICATION.md#the-account-store), so pass this file as `config_file` to the
+host setup functions. With `[store] path`, leave `acl.store` out or name the same file; with
+`[store] catalog`, leave it out. Store users with the `admin` role can issue grants as well as the
+principals in `admins`. A principal in `admins` also needs the `query:admin` scope, which for a
+store user means the `admin` role.
 
 All listeners in one DuckDB process must use the same `[acl]` settings.
+
+### Legacy users and tokens
+
+DuckFlight 0.1.x read password users and bearer tokens from `[users.<name>]` and `[tokens.<name>]`
+tables in this file. Later versions still read them until the account store is initialized, and
+ignore them, with a warning, once it has a user. Move them into the store with
+`duckflight_import`; see [Upgrading from 0.1.x](AUTHENTICATION.md#upgrading-from-01x).
+
+```toml
+[users.alice]
+password_hash = "<64 lowercase hexadecimal characters>"
+salt = [<16 decimal byte values from 0 through 255>]
+iterations = 10000
+
+[tokens.airport]
+sha256 = "<64 lowercase hexadecimal characters>"
+subject = "airport"
+scopes = ["query:execute", "transaction:manage"]
+```
+
+| Key | Meaning |
+| --- | --- |
+| `users.<name>.password_hash` | `PBKDF2-HMAC-SHA256(password, salt, iterations, output_length=32)`, as 64 hex characters |
+| `users.<name>.salt` | 16 integers from 0 to 255 |
+| `users.<name>.iterations` | At least 4096; the same for every user in the file |
+| `tokens.<name>.sha256` | SHA-256 digest of the raw token, as 64 hex characters |
+| `tokens.<name>.subject` | Identity recorded for auditing; defaults to the token name. The import makes it the token's store user |
+| `tokens.<name>.scopes` | [Authorization scopes](AUTHENTICATION.md#authorization-scopes); defaults to `["query:execute", "transaction:manage"]` |
+| `tokens.<name>.tenant_id` | Tenant used by row policies |
+
+The angle-bracket values describe the format and are not usable credentials. For builds that
+predate the account store, generate real entries with the [helper](AUTHENTICATION.md#the-helper).
 
 ## Telemetry environment variables
 
