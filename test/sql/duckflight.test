@@ -120,3 +120,200 @@ bob	NULL
 # Planning a setup function creates nothing: the work happens when the function runs.
 statement ok
 explain select * from duckflight_token_create('duckflight.toml', 'planned');
+
+# Planning an account store function changes nothing either.
+statement ok
+explain select * from duckflight_init('planned');
+
+statement ok
+explain select * from duckflight_import('planned.toml');
+
+# The config check also describes the account store the file resolves to.
+query TT
+select column_name, column_type from (describe select * from duckflight_config_check('duckflight.toml'));
+----
+users	UBIGINT
+tokens	UBIGINT
+oidc_providers	UBIGINT
+tls	BOOLEAN
+acl	BOOLEAN
+store_path	VARCHAR
+store_exists	BOOLEAN
+store_initialized	BOOLEAN
+store_users	UBIGINT
+ignored_users	UBIGINT
+ignored_tokens	UBIGINT
+
+query IIIIITIIIII
+select * from duckflight_config_check('with-tls.toml');
+----
+2	1	0	true	false	.duckflight/store.duckdb	false	false	0	0	0
+
+# A store path longer than the first buffer the extension offers is fetched again.
+query II
+select length(store_path), ends_with(store_path, '/store.duckdb') from duckflight_config_check('long-store.toml');
+----
+853	true
+
+statement error
+select * from duckflight_config_check('missing.toml');
+----
+Failed to read DuckFlight config missing.toml
+
+# The account store functions. The mock keeps an empty store in memory for each database.
+query TT
+select column_name, column_type from (describe select * from duckflight_accounts());
+----
+user	VARCHAR
+role	VARCHAR
+has_password	BOOLEAN
+tokens	UBIGINT
+tenant	VARCHAR
+
+query TTIIT
+select * from duckflight_accounts();
+----
+
+statement error
+select * from duckflight_user_add('bob');
+----
+not initialized; run duckflight_init('<admin name>') first
+
+statement error
+select * from duckflight_init(NULL);
+----
+admin must not be NULL
+
+query TT
+select column_name, column_type from (describe select * from duckflight_init('alice'));
+----
+user	VARCHAR
+password	VARCHAR
+
+query TT
+select * from duckflight_init('alice');
+----
+alice	mock-password:alice
+
+statement error
+select * from duckflight_init('mallory');
+----
+already initialized with 1 user(s)
+
+query TT
+select * from duckflight_user_add('bob', role := 'writer');
+----
+bob	mock-password:bob
+
+query TT
+select * from duckflight_user_add('carl', password_file := 'carl.password', config_file := 'duckflight.toml');
+----
+carl	NULL
+
+statement error
+select * from duckflight_user_add('dora', role := 'analyst');
+----
+role must be reader, writer or admin
+
+statement error
+select * from duckflight_user_add('dora', config_file := 'missing.toml');
+----
+Failed to read DuckFlight config missing.toml
+
+query TT
+select column_name, column_type from (describe select * from duckflight_token_add('bob', 'nightly'));
+----
+user	VARCHAR
+token_name	VARCHAR
+token	VARCHAR
+
+query TTT
+select * from duckflight_token_add('bob', 'nightly');
+----
+bob	nightly	mock-token:bob:nightly
+
+statement error
+select * from duckflight_token_add('nobody', 'nightly');
+----
+user does not exist: nobody
+
+statement error
+select * from duckflight_token_add('bob', NULL);
+----
+token_name must not be NULL
+
+query TT
+select column_name, column_type from (describe select * from duckflight_import('legacy.toml'));
+----
+kind	VARCHAR
+name	VARCHAR
+account	VARCHAR
+role	VARCHAR
+note	VARCHAR
+
+query TTTTT
+select * from duckflight_import('legacy.toml');
+----
+user	carol	carol	writer	imported
+token	nightly	svc	reader	imported
+
+query TTTTT
+select * from duckflight_import('legacy.toml');
+----
+user	carol	carol	writer	already in the store; skipped
+token	nightly	svc	reader	already in the store; skipped
+
+statement error
+select * from duckflight_import('');
+----
+a DuckFlight config file path is required
+
+query TTIIT
+select * from duckflight_accounts(config_file := 'duckflight.toml');
+----
+alice	admin	true	0	NULL
+bob	writer	true	1	NULL
+carl	reader	true	0	NULL
+carol	writer	true	0	acme
+svc	reader	false	1	NULL
+
+statement error
+select * from duckflight_accounts(config_file := 'missing.toml');
+----
+Failed to read DuckFlight config missing.toml
+
+query TIIIII
+select store_path, store_exists, store_initialized, store_users, ignored_users, ignored_tokens
+from duckflight_config_check('duckflight.toml');
+----
+.duckflight/store.duckdb	true	true	5	2	1
+
+# The two-argument serve functions take an empty config file to serve the account store.
+query TT
+select * from duckflight_pg_serve('127.0.0.1:0', '');
+----
+pgwire	127.0.0.1:15432
+
+query T
+select * from duckflight_stop('pgwire', '127.0.0.1:15432');
+----
+stopped pgwire server on 127.0.0.1:15432
+
+# Generated secrets reach only the result, not DuckDB's log.
+statement ok
+call enable_logging(level := 'trace');
+
+# As statements, so the runner logs their text rather than the queries it wraps them in.
+statement ok
+select * from duckflight_token_add('alice', 'logged');
+
+statement ok
+select * from duckflight_user_add('erin');
+
+query II
+select bool_or(contains(message, 'duckflight_token_add')),
+       count(*) filter (where contains(message, 'mock-' || 'token:alice')
+                           or contains(message, 'mock-' || 'password:erin'))
+from duckdb_logs;
+----
+true	0

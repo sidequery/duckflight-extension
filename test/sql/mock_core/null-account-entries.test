@@ -1,0 +1,41 @@
+# The mock core with a function table of the current size whose account store entries are null.
+# `make test_debug` runs this file with DUCKFLIGHT_MOCK_CORE set; the default run skips it.
+require-env DUCKFLIGHT_MOCK_CORE null-account-entries
+
+require duckflight
+
+query TT
+select * from duckflight_user_create('duckflight.toml', 'alice');
+----
+alice	mock-password:alice
+
+# The config check entry is present and describes the store.
+query IIIIITIIIII
+select * from duckflight_config_check('with-tls.toml');
+----
+2	1	0	true	false	.duckflight/store.duckdb	false	false	0	0	0
+
+statement error
+select * from duckflight_init('alice');
+----
+duckflight_init is not supported by the installed DuckFlight core, which predates the account store
+
+statement error
+select * from duckflight_user_add('bob');
+----
+duckflight_user_add is not supported by the installed DuckFlight core
+
+statement error
+select * from duckflight_token_add('bob', 'nightly');
+----
+duckflight_token_add is not supported by the installed DuckFlight core
+
+statement error
+select * from duckflight_accounts();
+----
+duckflight_accounts is not supported by the installed DuckFlight core
+
+statement error
+select * from duckflight_import('legacy.toml');
+----
+duckflight_import is not supported by the installed DuckFlight core

@@ -9,7 +9,7 @@ use std::{
     ffi::CString,
     ops::Range,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
@@ -56,6 +56,61 @@ struct ConfigSummary {
     oidc_providers: u64,
     tls: bool,
     acl: bool,
+    /// None from a core that predates the account store.
+    store: Option<StoreSummary>,
+}
+
+/// The account store a config file resolves to.
+struct StoreSummary {
+    path: String,
+    exists: bool,
+    initialized: bool,
+    users: u64,
+    /// `[users]` entries of the config file that the initialized store makes ineffective.
+    ignored_users: u64,
+    /// `[tokens]` entries of the config file that the initialized store makes ineffective.
+    ignored_tokens: u64,
+}
+
+/// A user added to the account store. Deliberately not `Debug`: it holds the generated password.
+struct CreatedUser {
+    user: String,
+    /// None when the password came from a password file.
+    password: Option<String>,
+}
+
+/// A token added to the account store. Deliberately not `Debug`: it holds the token.
+struct CreatedToken {
+    user: String,
+    token_name: String,
+    token: String,
+}
+
+/// One account store user.
+struct Account {
+    user: String,
+    role: String,
+    has_password: bool,
+    tokens: u64,
+    tenant: Option<String>,
+}
+
+/// One user or token an import brought into the account store, or found already there.
+struct ImportedAccount {
+    kind: String,
+    name: String,
+    account: String,
+    role: String,
+    note: String,
+}
+
+/// The error for a setup function the loaded core does not provide.
+fn unsupported(function: &str) -> Box<dyn Error> {
+    format!(
+        "{function} is not supported by the installed DuckFlight core, which predates the \
+         account store; install a DuckFlight build whose core provides it"
+    )
+    .into()
 }
 
 trait CoreRuntime: Send + Sync {
@@ -83,6 +138,38 @@ trait CoreRuntime: Send + Sync {
         name: &str,
         password_file: &str,
     ) -> Result<Option<String>, Box<dyn Error>>;
+
+    /// Create the account store's first user, an administrator. `config_file` (empty for none)
+    /// only selects the store; an empty `password_file` generates a password and returns it.
+    fn init(
+        &self,
+        config_file: &str,
+        admin: &str,
+        password_file: &str,
+    ) -> Result<CreatedUser, Box<dyn Error>>;
+
+    /// Add a user to an initialized account store. An empty `role` selects reader.
+    fn add_user(
+        &self,
+        config_file: &str,
+        name: &str,
+        role: &str,
+        password_file: &str,
+    ) -> Result<CreatedUser, Box<dyn Error>>;
+
+    /// Add a generated bearer token to an existing account store user.
+    fn add_token(
+        &self,
+        config_file: &str,
+        user: &str,
+        token_name: &str,
+    ) -> Result<CreatedToken, Box<dyn Error>>;
+
+    /// The account store's users, ordered by name.
+    fn accounts(&self, config_file: &str) -> Result<Vec<Account>, Box<dyn Error>>;
+
+    /// Bring the users and tokens of a config file into the account store it resolves to.
+    fn import(&self, config_file: &str) -> Result<Vec<ImportedAccount>, Box<dyn Error>>;
 
     /// Whether the runtime runs statements on this DuckDB connection, as it does for its
     /// listeners' sessions. When in doubt the answer is yes.
@@ -129,6 +216,26 @@ impl CoreRuntime for UnavailableCore {
     }
 
     fn create_user(&self, _: &str, _: &str, _: &str) -> Result<Option<String>, Box<dyn Error>> {
+        Err(self.unavailable())
+    }
+
+    fn init(&self, _: &str, _: &str, _: &str) -> Result<CreatedUser, Box<dyn Error>> {
+        Err(self.unavailable())
+    }
+
+    fn add_user(&self, _: &str, _: &str, _: &str, _: &str) -> Result<CreatedUser, Box<dyn Error>> {
+        Err(self.unavailable())
+    }
+
+    fn add_token(&self, _: &str, _: &str, _: &str) -> Result<CreatedToken, Box<dyn Error>> {
+        Err(self.unavailable())
+    }
+
+    fn accounts(&self, _: &str) -> Result<Vec<Account>, Box<dyn Error>> {
+        Err(self.unavailable())
+    }
+
+    fn import(&self, _: &str) -> Result<Vec<ImportedAccount>, Box<dyn Error>> {
         Err(self.unavailable())
     }
 
@@ -193,6 +300,37 @@ fn set_string(
     Ok(())
 }
 
+/// `set_string` for a generated password or token, whose errors never carry the value.
+fn set_secret(
+    output: &mut DataChunkHandle,
+    column: usize,
+    row: usize,
+    secret: &str,
+) -> Result<(), Box<dyn Error>> {
+    set_string(output, column, row, secret)
+        .map_err(|_| "DuckFlight could not return the generated secret".into())
+}
+
+fn set_optional_string(
+    output: &mut DataChunkHandle,
+    column: usize,
+    row: usize,
+    value: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
+    match value {
+        Some(value) => set_string(output, column, row, value),
+        None => {
+            output.flat_vector(column).set_null(row);
+            Ok(())
+        }
+    }
+}
+
+/// Write a fixed-width value. The caller's row is within the chunk it was given.
+fn set_value<T: Copy>(output: &mut DataChunkHandle, column: usize, row: usize, value: T) {
+    unsafe { output.flat_vector(column).as_mut_slice::<T>()[row] = value };
+}
+
 fn chunk_bounds(total: usize, start: usize, capacity: usize) -> Option<Range<usize>> {
     if start >= total || capacity == 0 {
         return None;
@@ -223,8 +361,8 @@ fn binding_connection_id(bind: &BindInfo) -> Result<u64, Box<dyn Error>> {
     }
 }
 
-/// Starting, stopping and listing servers, and editing credentials, belongs to the process that
-/// owns the database. A
+/// Starting, stopping and listing servers, and managing accounts and credentials, belongs to the
+/// process that owns the database. A
 /// session that arrived through a listener runs on one of the runtime's connections and is
 /// refused, whatever its credentials allow.
 fn require_host_connection(bind: &BindInfo) -> Result<(), Box<dyn Error>> {
@@ -244,6 +382,9 @@ struct ServeBindData {
     config_file: String,
 }
 
+/// An empty `config_file` serves the host's account store. There is no one-argument overload:
+/// DuckDB's C API keeps the first table function registered under a name and silently ignores
+/// any later registration of it, whatever its parameters.
 macro_rules! define_serve {
     ($name:ident, $protocol:expr) => {
         struct $name;
@@ -429,6 +570,14 @@ impl VTab for ConfigCheck {
         for name in ["tls", "acl"] {
             bind.add_result_column(name, logical_type(LogicalTypeId::Boolean));
         }
+        // The account store the file resolves to: null from a core that predates the store.
+        bind.add_result_column("store_path", varchar());
+        for name in ["store_exists", "store_initialized"] {
+            bind.add_result_column(name, logical_type(LogicalTypeId::Boolean));
+        }
+        for name in ["store_users", "ignored_users", "ignored_tokens"] {
+            bind.add_result_column(name, logical_type(LogicalTypeId::UBigint));
+        }
         Ok(ConfigPathBindData {
             path: bind.get_parameter(0).to_string(),
         })
@@ -458,6 +607,24 @@ impl VTab for ConfigCheck {
                     .flat_vector(counts.len() + column)
                     .as_mut_slice::<bool>()[0] = flag
             };
+        }
+        const STORE_COLUMNS: Range<usize> = 5..11;
+        match summary.store {
+            Some(store) => {
+                set_string(output, STORE_COLUMNS.start, 0, &store.path)?;
+                for (column, flag) in [store.exists, store.initialized].into_iter().enumerate() {
+                    set_value(output, STORE_COLUMNS.start + 1 + column, 0, flag);
+                }
+                let counts = [store.users, store.ignored_users, store.ignored_tokens];
+                for (column, count) in counts.into_iter().enumerate() {
+                    set_value(output, STORE_COLUMNS.start + 3 + column, 0, count);
+                }
+            }
+            None => {
+                for column in STORE_COLUMNS {
+                    output.flat_vector(column).set_null(0);
+                }
+            }
         }
         output.set_len(1);
         Ok(())
@@ -579,6 +746,339 @@ impl VTab for UserCreate {
     }
 }
 
+/// A positional varchar argument, which must not be NULL.
+fn required_argument(bind: &BindInfo, index: u64, name: &str) -> Result<String, Box<dyn Error>> {
+    let value = bind.get_parameter(index);
+    if value.is_null() {
+        return Err(format!("{name} must not be NULL").into());
+    }
+    Ok(value.to_string())
+}
+
+fn named_varchars(names: &[&str]) -> Option<Vec<(String, LogicalTypeHandle)>> {
+    Some(
+        names
+            .iter()
+            .map(|name| (name.to_string(), varchar()))
+            .collect(),
+    )
+}
+
+/// The account store functions take an optional `config_file`. It is needed only when a config
+/// file names a custom store path; otherwise the host's default store is used.
+#[derive(Clone)]
+struct AccountUserBindData {
+    config_file: String,
+    name: String,
+    role: String,
+    password_file: String,
+}
+
+fn emit_created_user(
+    output: &mut DataChunkHandle,
+    created: CreatedUser,
+) -> Result<(), Box<dyn Error>> {
+    set_string(output, 0, 0, &created.user)?;
+    match created.password {
+        Some(password) => set_secret(output, 1, 0, &password)?,
+        // The password came from a file the caller already has.
+        None => output.flat_vector(1).set_null(0),
+    }
+    output.set_len(1);
+    Ok(())
+}
+
+struct AccountInit;
+
+impl VTab for AccountInit {
+    type InitData = EmitOnce;
+    type BindData = AccountUserBindData;
+
+    fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+        require_host_connection(bind)?;
+        bind.add_result_column("user", varchar());
+        bind.add_result_column("password", varchar());
+        Ok(AccountUserBindData {
+            config_file: optional_argument(bind, "config_file"),
+            name: required_argument(bind, 0, "admin")?,
+            role: String::new(),
+            password_file: optional_argument(bind, "password_file"),
+        })
+    }
+
+    fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
+        Ok(EmitOnce::new())
+    }
+
+    fn func(
+        info: &TableFunctionInfo<Self>,
+        output: &mut DataChunkHandle,
+    ) -> Result<(), Box<dyn Error>> {
+        if info.get_init_data().done.swap(true, Ordering::Relaxed) {
+            output.set_len(0);
+            return Ok(());
+        }
+        let bind = info.get_bind_data();
+        let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
+        let created = state
+            .core
+            .init(&bind.config_file, &bind.name, &bind.password_file)?;
+        emit_created_user(output, created)
+    }
+
+    fn parameters() -> Option<Vec<LogicalTypeHandle>> {
+        Some(vec![varchar()])
+    }
+
+    fn named_parameters() -> Option<Vec<(String, LogicalTypeHandle)>> {
+        named_varchars(&["config_file", "password_file"])
+    }
+}
+
+struct AccountUserAdd;
+
+impl VTab for AccountUserAdd {
+    type InitData = EmitOnce;
+    type BindData = AccountUserBindData;
+
+    fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+        require_host_connection(bind)?;
+        bind.add_result_column("user", varchar());
+        bind.add_result_column("password", varchar());
+        Ok(AccountUserBindData {
+            config_file: optional_argument(bind, "config_file"),
+            name: required_argument(bind, 0, "name")?,
+            // Empty lets the core apply its default, reader.
+            role: optional_argument(bind, "role"),
+            password_file: optional_argument(bind, "password_file"),
+        })
+    }
+
+    fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
+        Ok(EmitOnce::new())
+    }
+
+    fn func(
+        info: &TableFunctionInfo<Self>,
+        output: &mut DataChunkHandle,
+    ) -> Result<(), Box<dyn Error>> {
+        if info.get_init_data().done.swap(true, Ordering::Relaxed) {
+            output.set_len(0);
+            return Ok(());
+        }
+        let bind = info.get_bind_data();
+        let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
+        let created = state.core.add_user(
+            &bind.config_file,
+            &bind.name,
+            &bind.role,
+            &bind.password_file,
+        )?;
+        emit_created_user(output, created)
+    }
+
+    fn parameters() -> Option<Vec<LogicalTypeHandle>> {
+        Some(vec![varchar()])
+    }
+
+    fn named_parameters() -> Option<Vec<(String, LogicalTypeHandle)>> {
+        named_varchars(&["role", "config_file", "password_file"])
+    }
+}
+
+#[derive(Clone)]
+struct AccountTokenBindData {
+    config_file: String,
+    user: String,
+    token_name: String,
+}
+
+struct AccountTokenAdd;
+
+impl VTab for AccountTokenAdd {
+    type InitData = EmitOnce;
+    type BindData = AccountTokenBindData;
+
+    fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+        require_host_connection(bind)?;
+        for name in ["user", "token_name", "token"] {
+            bind.add_result_column(name, varchar());
+        }
+        Ok(AccountTokenBindData {
+            config_file: optional_argument(bind, "config_file"),
+            user: required_argument(bind, 0, "user")?,
+            token_name: required_argument(bind, 1, "token_name")?,
+        })
+    }
+
+    fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
+        Ok(EmitOnce::new())
+    }
+
+    fn func(
+        info: &TableFunctionInfo<Self>,
+        output: &mut DataChunkHandle,
+    ) -> Result<(), Box<dyn Error>> {
+        if info.get_init_data().done.swap(true, Ordering::Relaxed) {
+            output.set_len(0);
+            return Ok(());
+        }
+        let bind = info.get_bind_data();
+        let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
+        let created = state
+            .core
+            .add_token(&bind.config_file, &bind.user, &bind.token_name)?;
+        set_string(output, 0, 0, &created.user)?;
+        set_string(output, 1, 0, &created.token_name)?;
+        set_secret(output, 2, 0, &created.token)?;
+        output.set_len(1);
+        Ok(())
+    }
+
+    fn parameters() -> Option<Vec<LogicalTypeHandle>> {
+        Some(vec![varchar(), varchar()])
+    }
+
+    fn named_parameters() -> Option<Vec<(String, LogicalTypeHandle)>> {
+        named_varchars(&["config_file"])
+    }
+}
+
+/// Rows a function fetches from the core when it first runs, never while it is planned, and
+/// returns a chunk at a time.
+struct FetchedRows<T> {
+    rows: OnceLock<Vec<T>>,
+    offset: AtomicUsize,
+}
+
+impl<T> FetchedRows<T> {
+    fn new() -> Self {
+        Self {
+            rows: OnceLock::new(),
+            offset: AtomicUsize::new(0),
+        }
+    }
+
+    /// The rows for the next chunk, fetching them on the first call.
+    fn next_chunk(
+        &self,
+        capacity: usize,
+        fetch: impl FnOnce() -> Result<Vec<T>, Box<dyn Error>>,
+    ) -> Result<&[T], Box<dyn Error>> {
+        let rows = match self.rows.get() {
+            Some(rows) => rows,
+            None => {
+                let fetched = fetch()?;
+                self.rows.get_or_init(|| fetched)
+            }
+        };
+        let start = self.offset.fetch_add(capacity, Ordering::Relaxed);
+        Ok(chunk_bounds(rows.len(), start, capacity).map_or(&[], |bounds| &rows[bounds]))
+    }
+}
+
+#[derive(Clone)]
+struct ConfigFileBindData {
+    config_file: String,
+}
+
+struct AccountList;
+
+impl VTab for AccountList {
+    type InitData = FetchedRows<Account>;
+    type BindData = ConfigFileBindData;
+
+    fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+        require_host_connection(bind)?;
+        bind.add_result_column("user", varchar());
+        bind.add_result_column("role", varchar());
+        bind.add_result_column("has_password", logical_type(LogicalTypeId::Boolean));
+        bind.add_result_column("tokens", logical_type(LogicalTypeId::UBigint));
+        bind.add_result_column("tenant", varchar());
+        Ok(ConfigFileBindData {
+            config_file: optional_argument(bind, "config_file"),
+        })
+    }
+
+    fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
+        Ok(FetchedRows::new())
+    }
+
+    fn func(
+        info: &TableFunctionInfo<Self>,
+        output: &mut DataChunkHandle,
+    ) -> Result<(), Box<dyn Error>> {
+        let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
+        let capacity = output.flat_vector(0).capacity();
+        let rows = info.get_init_data().next_chunk(capacity, || {
+            state.core.accounts(&info.get_bind_data().config_file)
+        })?;
+        for (row, account) in rows.iter().enumerate() {
+            set_string(output, 0, row, &account.user)?;
+            set_string(output, 1, row, &account.role)?;
+            set_value(output, 2, row, account.has_password);
+            set_value(output, 3, row, account.tokens);
+            set_optional_string(output, 4, row, account.tenant.as_deref())?;
+        }
+        output.set_len(rows.len());
+        Ok(())
+    }
+
+    fn named_parameters() -> Option<Vec<(String, LogicalTypeHandle)>> {
+        named_varchars(&["config_file"])
+    }
+}
+
+struct AccountImport;
+
+impl VTab for AccountImport {
+    type InitData = FetchedRows<ImportedAccount>;
+    type BindData = ConfigFileBindData;
+
+    fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+        require_host_connection(bind)?;
+        for name in ["kind", "name", "account", "role", "note"] {
+            bind.add_result_column(name, varchar());
+        }
+        Ok(ConfigFileBindData {
+            config_file: required_argument(bind, 0, "config_file")?,
+        })
+    }
+
+    fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
+        Ok(FetchedRows::new())
+    }
+
+    fn func(
+        info: &TableFunctionInfo<Self>,
+        output: &mut DataChunkHandle,
+    ) -> Result<(), Box<dyn Error>> {
+        let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
+        let capacity = output.flat_vector(0).capacity();
+        let rows = info.get_init_data().next_chunk(capacity, || {
+            state.core.import(&info.get_bind_data().config_file)
+        })?;
+        for (row, item) in rows.iter().enumerate() {
+            let values = [
+                &item.kind,
+                &item.name,
+                &item.account,
+                &item.role,
+                &item.note,
+            ];
+            for (column, value) in values.into_iter().enumerate() {
+                set_string(output, column, row, value)?;
+            }
+        }
+        output.set_len(rows.len());
+        Ok(())
+    }
+
+    fn parameters() -> Option<Vec<LogicalTypeHandle>> {
+        Some(vec![varchar()])
+    }
+}
+
 struct CoreStatusTable;
 
 impl VTab for CoreStatusTable {
@@ -648,6 +1148,20 @@ fn register_extension(
         "duckflight_user_create",
         &state,
     )?;
+    connection
+        .register_table_function_with_extra_info::<AccountInit, _>("duckflight_init", &state)?;
+    connection.register_table_function_with_extra_info::<AccountUserAdd, _>(
+        "duckflight_user_add",
+        &state,
+    )?;
+    connection.register_table_function_with_extra_info::<AccountTokenAdd, _>(
+        "duckflight_token_add",
+        &state,
+    )?;
+    connection
+        .register_table_function_with_extra_info::<AccountList, _>("duckflight_accounts", &state)?;
+    connection
+        .register_table_function_with_extra_info::<AccountImport, _>("duckflight_import", &state)?;
     connection.register_table_function_with_extra_info::<CoreStatusTable, _>(
         "duckflight_core_status",
         &state,

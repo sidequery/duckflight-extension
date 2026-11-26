@@ -1,9 +1,12 @@
-use super::{ConfigSummary, CoreRuntime, CoreStatus, Protocol};
+use super::{
+    Account, ConfigSummary, CoreRuntime, CoreStatus, CreatedToken, CreatedUser, ImportedAccount,
+    Protocol, StoreSummary, unsupported,
+};
 use duckflight_extension_abi::{
     DUCKFLIGHT_CORE_ABI_V1, DUCKFLIGHT_CORE_API_SYMBOL_V1, DuckflightBytesV1,
-    DuckflightConfigSummaryV1, DuckflightCoreApiEntryV1, DuckflightCoreApiV1,
-    DuckflightCoreCreateOptionsV1, DuckflightCoreHandle, DuckflightOutputBufferV1,
-    DuckflightProtocol, DuckflightStatus,
+    DuckflightConfigStoreSummaryV1, DuckflightConfigSummaryV1, DuckflightCoreApiEntryV1,
+    DuckflightCoreApiV1, DuckflightCoreCreateOptionsV1, DuckflightCoreHandle,
+    DuckflightOutputBufferV1, DuckflightProtocol, DuckflightStatus,
 };
 use libloading::Library;
 use std::{error::Error, ffi::c_void, fmt, path::Path, ptr, slice, str};
@@ -82,6 +85,8 @@ unsafe fn load_bundle(bytes: &[u8]) -> Result<(Library, BundleFile), DynamicCore
 }
 
 const ERROR_CAPACITY: usize = 4096;
+/// Room for the account store path on the first config check; a longer path is fetched again.
+const STORE_PATH_CAPACITY: usize = 256;
 const API_HEADER_SIZE: usize =
     std::mem::offset_of!(DuckflightCoreApiV1, abi_version) + std::mem::size_of::<u32>();
 /// Every v1 runtime provides the entries before this one. Later entries were appended, and a
@@ -374,27 +379,67 @@ impl CoreRuntime for DynamicCore {
 
     fn check_config(&self, path: &str) -> Result<ConfigSummary, Box<dyn Error>> {
         let check = self.api().config_check.ok_or_else(missing_entry)?;
-        let mut summary = DuckflightConfigSummaryV1 {
-            struct_size: std::mem::size_of::<DuckflightConfigSummaryV1>() as u32,
-            ..Default::default()
-        };
-        let mut error = ErrorBuffer::new();
-        let status = unsafe {
-            check(
-                self.handle,
-                DuckflightBytesV1::from_utf8(path),
-                &mut summary,
-                error.as_ffi(),
-            )
-        };
-        check_status(status, &error)?;
-        Ok(ConfigSummary {
-            users: summary.users,
-            tokens: summary.tokens,
-            oidc_providers: summary.oidc_providers,
-            tls: summary.tls,
-            acl: summary.acl,
-        })
+        let mut store_path = vec![0; STORE_PATH_CAPACITY];
+        // A path that does not fit is reported with its length, so one retry is enough.
+        for _ in 0..2 {
+            let mut required = 0;
+            // A core that predates the account store fills only the v1 prefix of this request.
+            let mut summary = DuckflightConfigStoreSummaryV1::new(DuckflightOutputBufferV1 {
+                data: store_path.as_mut_ptr(),
+                capacity: store_path.len(),
+                required: &mut required,
+            });
+            let mut error = ErrorBuffer::new();
+            let status = unsafe {
+                check(
+                    self.handle,
+                    DuckflightBytesV1::from_utf8(path),
+                    (&raw mut summary).cast::<DuckflightConfigSummaryV1>(),
+                    error.as_ffi(),
+                )
+            };
+            // On return the size says how much of the request the core filled.
+            let extended = summary.base.struct_size as usize
+                >= std::mem::size_of::<DuckflightConfigStoreSummaryV1>();
+            if extended
+                && status == DuckflightStatus::BUFFER_TOO_SMALL
+                && required > store_path.len()
+            {
+                store_path.resize(required, 0);
+                continue;
+            }
+            check_status(status, &error)?;
+            let store = if extended {
+                let path = store_path.get(..required).ok_or_else(|| {
+                    DynamicCoreError("runtime reported a store path it did not write".into())
+                })?;
+                Some(StoreSummary {
+                    path: str::from_utf8(path)
+                        .map_err(|error| {
+                            DynamicCoreError(format!(
+                                "runtime returned an invalid store path: {error}"
+                            ))
+                        })?
+                        .to_owned(),
+                    exists: summary.store_exists,
+                    initialized: summary.store_initialized,
+                    users: summary.store_users,
+                    ignored_users: summary.ignored_users,
+                    ignored_tokens: summary.ignored_tokens,
+                })
+            } else {
+                None
+            };
+            return Ok(ConfigSummary {
+                users: summary.base.users,
+                tokens: summary.base.tokens,
+                oidc_providers: summary.base.oidc_providers,
+                tls: summary.base.tls,
+                acl: summary.base.acl,
+                store,
+            });
+        }
+        Err(DynamicCoreError("runtime store path does not fit the size it reported".into()).into())
     }
 
     fn create_token(&self, path: &str, name: &str, scopes: &str) -> Result<String, Box<dyn Error>> {
@@ -443,6 +488,133 @@ impl CoreRuntime for DynamicCore {
         Ok(password)
     }
 
+    fn init(
+        &self,
+        config_file: &str,
+        admin: &str,
+        password_file: &str,
+    ) -> Result<CreatedUser, Box<dyn Error>> {
+        let init = self
+            .api()
+            .init
+            .ok_or_else(|| unsupported("duckflight_init"))?;
+        let mut created = None;
+        let mut error = ErrorBuffer::new();
+        let status = unsafe {
+            init(
+                self.handle,
+                DuckflightBytesV1::from_utf8(config_file),
+                DuckflightBytesV1::from_utf8(admin),
+                DuckflightBytesV1::from_utf8(password_file),
+                Some(receive_created_user),
+                (&mut created as *mut Delivered<CreatedUser>).cast(),
+                error.as_ffi(),
+            )
+        };
+        delivered(status, &error, created, "user")
+    }
+
+    fn add_user(
+        &self,
+        config_file: &str,
+        name: &str,
+        role: &str,
+        password_file: &str,
+    ) -> Result<CreatedUser, Box<dyn Error>> {
+        let add = self
+            .api()
+            .user_add
+            .ok_or_else(|| unsupported("duckflight_user_add"))?;
+        let mut created = None;
+        let mut error = ErrorBuffer::new();
+        let status = unsafe {
+            add(
+                self.handle,
+                DuckflightBytesV1::from_utf8(config_file),
+                DuckflightBytesV1::from_utf8(name),
+                DuckflightBytesV1::from_utf8(role),
+                DuckflightBytesV1::from_utf8(password_file),
+                Some(receive_created_user),
+                (&mut created as *mut Delivered<CreatedUser>).cast(),
+                error.as_ffi(),
+            )
+        };
+        delivered(status, &error, created, "user")
+    }
+
+    fn add_token(
+        &self,
+        config_file: &str,
+        user: &str,
+        token_name: &str,
+    ) -> Result<CreatedToken, Box<dyn Error>> {
+        let add = self
+            .api()
+            .token_add
+            .ok_or_else(|| unsupported("duckflight_token_add"))?;
+        let mut created = None;
+        let mut error = ErrorBuffer::new();
+        let status = unsafe {
+            add(
+                self.handle,
+                DuckflightBytesV1::from_utf8(config_file),
+                DuckflightBytesV1::from_utf8(user),
+                DuckflightBytesV1::from_utf8(token_name),
+                Some(receive_created_token),
+                (&mut created as *mut Delivered<CreatedToken>).cast(),
+                error.as_ffi(),
+            )
+        };
+        delivered(status, &error, created, "token")
+    }
+
+    fn accounts(&self, config_file: &str) -> Result<Vec<Account>, Box<dyn Error>> {
+        let accounts = self
+            .api()
+            .accounts
+            .ok_or_else(|| unsupported("duckflight_accounts"))?;
+        let mut rows: Rows<Account> = Ok(Vec::new());
+        let mut error = ErrorBuffer::new();
+        let status = unsafe {
+            accounts(
+                self.handle,
+                DuckflightBytesV1::from_utf8(config_file),
+                Some(receive_account),
+                (&mut rows as *mut Rows<Account>).cast(),
+                error.as_ffi(),
+            )
+        };
+        let rows = rows.map_err(DynamicCoreError)?;
+        check_status(status, &error)?;
+        Ok(rows)
+    }
+
+    fn import(&self, config_file: &str) -> Result<Vec<ImportedAccount>, Box<dyn Error>> {
+        let import = self
+            .api()
+            .import
+            .ok_or_else(|| unsupported("duckflight_import"))?;
+        let mut rows: Rows<ImportedAccount> = Ok(Vec::new());
+        let mut error = ErrorBuffer::new();
+        let status = unsafe {
+            import(
+                self.handle,
+                DuckflightBytesV1::from_utf8(config_file),
+                Some(receive_imported_account),
+                (&mut rows as *mut Rows<ImportedAccount>).cast(),
+                error.as_ffi(),
+            )
+        };
+        // The core delivers the rows after committing the import.
+        let rows = rows.map_err(|message| {
+            DynamicCoreError(format!(
+                "the import was applied, but its result could not be read: {message}"
+            ))
+        })?;
+        check_status(status, &error)?;
+        Ok(rows)
+    }
+
     fn owns_connection(&self, connection_id: u64) -> bool {
         match self.api().owns_connection {
             Some(owns_connection) => unsafe { owns_connection(self.handle, connection_id) },
@@ -476,6 +648,147 @@ unsafe extern "C" fn receive_secret(
         }
         Err(_) => DuckflightStatus::INVALID_ARGUMENT,
     }
+}
+
+/// What a created-user or created-token visitor received: nothing yet, the value, or why it could
+/// not be read. A reason never quotes the value, which may be a secret.
+type Delivered<T> = Option<Result<T, String>>;
+
+/// Rows a listing visitor received, or why one could not be read.
+type Rows<T> = Result<Vec<T>, String>;
+
+fn visited_status<T, E>(result: &Result<T, E>) -> DuckflightStatus {
+    if result.is_ok() {
+        DuckflightStatus::OK
+    } else {
+        DuckflightStatus::INVALID_ARGUMENT
+    }
+}
+
+/// The value a setup call delivered. The core runs the visitor after it committed the change, so
+/// a value the shim could not read still names what was created.
+fn delivered<T>(
+    status: DuckflightStatus,
+    error: &ErrorBuffer,
+    value: Delivered<T>,
+    what: &str,
+) -> Result<T, Box<dyn Error>> {
+    match value {
+        // The visitor's own status comes back without a diagnostic, so report its reason.
+        Some(Err(message)) => Err(DynamicCoreError(format!(
+            "the {what} was created, but the runtime's result could not be read: {message}"
+        ))
+        .into()),
+        value => {
+            check_status(status, error)?;
+            match value {
+                Some(Ok(value)) => Ok(value),
+                _ => Err(DynamicCoreError(format!("runtime did not return the new {what}")).into()),
+            }
+        }
+    }
+}
+
+unsafe extern "C" fn receive_created_user(
+    context: *mut c_void,
+    user: DuckflightBytesV1,
+    password: DuckflightBytesV1,
+    has_password: bool,
+) -> DuckflightStatus {
+    let output = unsafe { &mut *context.cast::<Delivered<CreatedUser>>() };
+    let created = borrowed_string(user).and_then(|user| {
+        let password = if has_password {
+            Some(borrowed_string(password)?)
+        } else {
+            None
+        };
+        Ok(CreatedUser { user, password })
+    });
+    let status = visited_status(&created);
+    *output = Some(created);
+    status
+}
+
+unsafe extern "C" fn receive_created_token(
+    context: *mut c_void,
+    user: DuckflightBytesV1,
+    token_name: DuckflightBytesV1,
+    token: DuckflightBytesV1,
+) -> DuckflightStatus {
+    let output = unsafe { &mut *context.cast::<Delivered<CreatedToken>>() };
+    let created = (|| {
+        Ok(CreatedToken {
+            user: borrowed_string(user)?,
+            token_name: borrowed_string(token_name)?,
+            token: borrowed_string(token)?,
+        })
+    })();
+    let status = visited_status(&created);
+    *output = Some(created);
+    status
+}
+
+/// Append one visited row, or record why it could not be read and stop the listing.
+fn push_row<T>(rows: &mut Rows<T>, row: Result<T, String>) -> DuckflightStatus {
+    match (rows.as_mut(), row) {
+        (Ok(rows), Ok(row)) => {
+            rows.push(row);
+            DuckflightStatus::OK
+        }
+        (Ok(_), Err(message)) => {
+            *rows = Err(message);
+            DuckflightStatus::INVALID_ARGUMENT
+        }
+        // A runtime that keeps visiting after a refusal gets the same answer.
+        (Err(_), _) => DuckflightStatus::INVALID_ARGUMENT,
+    }
+}
+
+unsafe extern "C" fn receive_account(
+    context: *mut c_void,
+    user: DuckflightBytesV1,
+    role: DuckflightBytesV1,
+    has_password: bool,
+    tokens: u64,
+    tenant: DuckflightBytesV1,
+    has_tenant: bool,
+) -> DuckflightStatus {
+    let rows = unsafe { &mut *context.cast::<Rows<Account>>() };
+    let row = (|| {
+        Ok(Account {
+            user: borrowed_string(user)?,
+            role: borrowed_string(role)?,
+            has_password,
+            tokens,
+            tenant: if has_tenant {
+                Some(borrowed_string(tenant)?)
+            } else {
+                None
+            },
+        })
+    })();
+    push_row(rows, row)
+}
+
+unsafe extern "C" fn receive_imported_account(
+    context: *mut c_void,
+    kind: DuckflightBytesV1,
+    name: DuckflightBytesV1,
+    account: DuckflightBytesV1,
+    role: DuckflightBytesV1,
+    note: DuckflightBytesV1,
+) -> DuckflightStatus {
+    let rows = unsafe { &mut *context.cast::<Rows<ImportedAccount>>() };
+    let row = (|| {
+        Ok(ImportedAccount {
+            kind: borrowed_string(kind)?,
+            name: borrowed_string(name)?,
+            account: borrowed_string(account)?,
+            role: borrowed_string(role)?,
+            note: borrowed_string(note)?,
+        })
+    })();
+    push_row(rows, row)
 }
 
 fn abi_protocol(protocol: Protocol) -> DuckflightProtocol {
@@ -567,6 +880,10 @@ fn check_status(status: DuckflightStatus, error: &ErrorBuffer) -> Result<(), Box
 #[cfg(test)]
 mod tests {
     use super::*;
+    use duckflight_extension_abi::{
+        DuckflightAccountVisitorV1, DuckflightCreatedTokenVisitorV1,
+        DuckflightCreatedUserVisitorV1, DuckflightImportVisitorV1,
+    };
 
     #[test]
     fn protocols_round_trip_through_the_abi() {
@@ -768,5 +1085,292 @@ mod tests {
                 .owns_connection
                 .is_none()
         );
+    }
+
+    // A test runtime whose entries ignore their handle and deliver fixed values.
+
+    unsafe extern "C" fn test_init(
+        _: DuckflightCoreHandle,
+        _: DuckflightBytesV1,
+        admin: DuckflightBytesV1,
+        password_file: DuckflightBytesV1,
+        visitor: Option<DuckflightCreatedUserVisitorV1>,
+        context: *mut c_void,
+        _: *mut DuckflightOutputBufferV1,
+    ) -> DuckflightStatus {
+        // A password file means no password is returned.
+        let password = if password_file.len == 0 {
+            DuckflightBytesV1::from_utf8("generated")
+        } else {
+            DuckflightBytesV1::EMPTY
+        };
+        unsafe { visitor.unwrap()(context, admin, password, password_file.len == 0) }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    unsafe extern "C" fn test_user_add(
+        _: DuckflightCoreHandle,
+        _: DuckflightBytesV1,
+        _: DuckflightBytesV1,
+        _: DuckflightBytesV1,
+        _: DuckflightBytesV1,
+        _: Option<DuckflightCreatedUserVisitorV1>,
+        _: *mut c_void,
+        error: *mut DuckflightOutputBufferV1,
+    ) -> DuckflightStatus {
+        unsafe {
+            report_error(
+                DuckflightBytesV1::from_utf8("role must be reader, writer or admin"),
+                DuckflightStatus::INVALID_ARGUMENT,
+                error,
+            )
+        }
+    }
+
+    const SECRET: &[u8] = b"s3cret-token\xff";
+
+    /// Delivers a token that is not UTF-8, which the shim cannot return.
+    unsafe extern "C" fn test_token_add(
+        _: DuckflightCoreHandle,
+        _: DuckflightBytesV1,
+        user: DuckflightBytesV1,
+        token_name: DuckflightBytesV1,
+        visitor: Option<DuckflightCreatedTokenVisitorV1>,
+        context: *mut c_void,
+        _: *mut DuckflightOutputBufferV1,
+    ) -> DuckflightStatus {
+        let token = DuckflightBytesV1 {
+            data: SECRET.as_ptr(),
+            len: SECRET.len(),
+        };
+        unsafe { visitor.unwrap()(context, user, token_name, token) }
+    }
+
+    unsafe extern "C" fn test_accounts(
+        _: DuckflightCoreHandle,
+        _: DuckflightBytesV1,
+        visitor: Option<DuckflightAccountVisitorV1>,
+        context: *mut c_void,
+        _: *mut DuckflightOutputBufferV1,
+    ) -> DuckflightStatus {
+        let visitor = visitor.unwrap();
+        let text = DuckflightBytesV1::from_utf8;
+        for (user, tenant) in [("alice", None), ("bob", Some("acme"))] {
+            let status = unsafe {
+                visitor(
+                    context,
+                    text(user),
+                    text("writer"),
+                    tenant.is_none(),
+                    2,
+                    tenant.map_or(DuckflightBytesV1::EMPTY, text),
+                    tenant.is_some(),
+                )
+            };
+            if !status.is_ok() {
+                return status;
+            }
+        }
+        DuckflightStatus::OK
+    }
+
+    unsafe extern "C" fn test_import(
+        _: DuckflightCoreHandle,
+        _: DuckflightBytesV1,
+        visitor: Option<DuckflightImportVisitorV1>,
+        context: *mut c_void,
+        _: *mut DuckflightOutputBufferV1,
+    ) -> DuckflightStatus {
+        let text = DuckflightBytesV1::from_utf8;
+        unsafe {
+            visitor.unwrap()(
+                context,
+                text("token"),
+                text("nightly"),
+                text("svc"),
+                text("reader"),
+                text("imported"),
+            )
+        }
+    }
+
+    static CONFIG_CHECK_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    /// Reports a store path longer than the shim's first buffer, as a current core does.
+    unsafe extern "C" fn test_config_check(
+        _: DuckflightCoreHandle,
+        _: DuckflightBytesV1,
+        out_summary: *mut DuckflightConfigSummaryV1,
+        _: *mut DuckflightOutputBufferV1,
+    ) -> DuckflightStatus {
+        CONFIG_CHECK_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = "p".repeat(STORE_PATH_CAPACITY + 1);
+        unsafe {
+            assert!(
+                (*out_summary).struct_size as usize
+                    >= std::mem::size_of::<DuckflightConfigStoreSummaryV1>()
+            );
+            let out = &mut *out_summary.cast::<DuckflightConfigStoreSummaryV1>();
+            out.base.users = 3;
+            out.store_initialized = true;
+            out.store_users = 1;
+            out.ignored_users = 3;
+            *out.store_path.required = path.len();
+            if out.store_path.capacity < path.len() {
+                return DuckflightStatus::BUFFER_TOO_SMALL;
+            }
+            ptr::copy_nonoverlapping(path.as_ptr(), out.store_path.data, path.len());
+        }
+        DuckflightStatus::OK
+    }
+
+    /// Fills only the v1 summary and says so, as a core that predates the account store does.
+    unsafe extern "C" fn test_config_check_v1(
+        _: DuckflightCoreHandle,
+        _: DuckflightBytesV1,
+        out_summary: *mut DuckflightConfigSummaryV1,
+        _: *mut DuckflightOutputBufferV1,
+    ) -> DuckflightStatus {
+        unsafe {
+            *out_summary = DuckflightConfigSummaryV1 {
+                struct_size: std::mem::size_of::<DuckflightConfigSummaryV1>() as u32,
+                users: 2,
+                ..Default::default()
+            };
+        }
+        DuckflightStatus::OK
+    }
+
+    fn test_api() -> DuckflightCoreApiV1 {
+        let mut api: DuckflightCoreApiV1 = unsafe { std::mem::zeroed() };
+        api.struct_size = std::mem::size_of::<DuckflightCoreApiV1>() as u32;
+        api.abi_version = DUCKFLIGHT_CORE_ABI_V1;
+        api.config_check = Some(test_config_check);
+        api.init = Some(test_init);
+        api.user_add = Some(test_user_add);
+        api.token_add = Some(test_token_add);
+        api.accounts = Some(test_accounts);
+        api.import = Some(test_import);
+        api
+    }
+
+    /// A core around `api`, read the way a loaded runtime's table is. It has no `destroy`.
+    #[cfg(unix)]
+    fn test_core(api: DuckflightCoreApiV1) -> DynamicCore {
+        DynamicCore {
+            api: unsafe { read_api_table(&raw const api) }.unwrap(),
+            handle: ptr::NonNull::<u8>::dangling().as_ptr().cast(),
+            status_detail: "test core",
+            _library: libloading::os::unix::Library::this().into(),
+            _bundle_file: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_core_without_the_account_store_refuses_each_new_function() {
+        let mut before_store = test_api();
+        before_store.struct_size = std::mem::offset_of!(DuckflightCoreApiV1, init) as u32;
+        // A table of the current size that leaves the entries empty.
+        let mut null_entries = test_api();
+        null_entries.init = None;
+        null_entries.user_add = None;
+        null_entries.token_add = None;
+        null_entries.accounts = None;
+        null_entries.import = None;
+        for api in [before_store, null_entries] {
+            let core = test_core(api);
+            // Entries past a short table's size are never read, though they are set here.
+            let errors = [
+                ("duckflight_init", core.init("", "alice", "").err()),
+                (
+                    "duckflight_user_add",
+                    core.add_user("", "bob", "", "").err(),
+                ),
+                ("duckflight_token_add", core.add_token("", "bob", "t").err()),
+                ("duckflight_accounts", core.accounts("").err()),
+                ("duckflight_import", core.import("old.toml").err()),
+            ];
+            for (function, error) in errors {
+                let error = error
+                    .expect("an older core refuses the function")
+                    .to_string();
+                assert!(error.starts_with(function), "{error}");
+                assert!(error.contains("predates the account store"), "{error}");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_check_fetches_a_long_store_path_and_reads_an_old_summary() {
+        let core = test_core(test_api());
+        CONFIG_CHECK_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let summary = core.check_config("duckflight.toml").unwrap();
+        assert_eq!(
+            CONFIG_CHECK_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+        assert_eq!(summary.users, 3);
+        let store = summary.store.expect("a current core describes the store");
+        assert_eq!(store.path, "p".repeat(STORE_PATH_CAPACITY + 1));
+        assert!(store.initialized && !store.exists);
+        assert_eq!((store.users, store.ignored_users), (1, 3));
+
+        let mut old = test_api();
+        old.config_check = Some(test_config_check_v1);
+        let summary = test_core(old).check_config("duckflight.toml").unwrap();
+        assert_eq!(summary.users, 2);
+        assert!(summary.store.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn setup_results_reach_the_shim_with_missing_values_as_none() {
+        let core = test_core(test_api());
+        let generated = core.init("", "alice", "").unwrap();
+        assert_eq!(generated.user, "alice");
+        assert_eq!(generated.password.as_deref(), Some("generated"));
+        assert!(core.init("", "alice", "pw.txt").unwrap().password.is_none());
+
+        let accounts = core.accounts("").unwrap();
+        let summary: Vec<_> = accounts
+            .iter()
+            .map(|account| {
+                (
+                    account.user.as_str(),
+                    account.has_password,
+                    account.tenant.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [("alice", true, None), ("bob", false, Some("acme"))]
+        );
+        assert_eq!(accounts[0].tokens, 2);
+
+        let imported = core.import("old.toml").unwrap();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(
+            [&imported[0].kind, &imported[0].account, &imported[0].note],
+            ["token", "svc", "imported"]
+        );
+
+        let error = core.add_user("", "bob", "analyst", "").err().unwrap();
+        assert_eq!(error.to_string(), "role must be reader, writer or admin");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_secret_is_never_quoted() {
+        let error = test_core(test_api())
+            .add_token("", "bob", "nightly")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.starts_with("the token was created, but"), "{error}");
+        assert!(!error.contains("s3cret"), "{error}");
     }
 }
