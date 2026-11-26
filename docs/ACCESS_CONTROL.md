@@ -6,10 +6,10 @@ owner retains direct access to the database.
 
 ## Give a reader access to one column
 
-This example uses the unified Linux or macOS extension build with stock DuckDB **2.0.1**,
-two password-authenticated users, and an in-memory table. The signed 2.0.0 packages
-predate built-in ACLs. The 2.0.1 build is coming but is not published yet; see the
-[compatibility table](INSTALL.md#which-build-you-get).
+This example uses DuckFlight 0.1.21 or later on stock DuckDB **2.0.1**, two
+password-authenticated users, and an in-memory table. Access controls are not available on
+DuckDB 2.0.0. See the [compatibility table](INSTALL.md#which-build-you-get) for where to
+install from.
 
 **1. Configure the two logins and the role store.** From the extension checkout, create
 the credentials with the authentication helper. It prompts for each password.
@@ -21,8 +21,7 @@ uv run scripts/duckflight_auth.py user add reader --file acl-demo/duckflight.tom
 ```
 
 Append this section to `acl-demo/duckflight.toml` after generating the credentials.
-The helper currently accepts only its authentication and runtime settings. Keep a
-credential-only copy if you use it for subsequent password changes.
+The helper keeps it when you change credentials later.
 
 ```toml
 [acl]
@@ -34,12 +33,12 @@ DuckFlight creates the role store relative to the config file. Keep its director
 and writable by the host account. `local~admin` names the authenticated local user who
 can issue grants. All listeners on the same host runtime must use the same ACL settings.
 
-**2. Start the host.** In DuckDB 2.0.1, load the unified extension for your platform.
-For an unsigned local build, launch `duckdb -unsigned` and supply the file's actual path.
-Run from the directory containing `acl-demo` and leave this DuckDB session open.
+**2. Start the host.** In DuckDB 2.0.1, install DuckFlight from the
+[Sidequery repository](INSTALL.md#sidequery-repository) and load it. Run from the directory
+containing `acl-demo` and leave this DuckDB session open.
 
 ```sql
-load '/path/to/duckflight.duckdb_extension';
+load duckflight from sidequery;
 create table orders as select 42 as id, 'account-1234' as account_number;
 select * from duckflight_pg_serve('127.0.0.1:5433', 'acl-demo/duckflight.toml');
 ```

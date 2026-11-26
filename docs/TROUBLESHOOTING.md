@@ -12,20 +12,20 @@ select * from duckflight_servers();
 
 ### `loaded` is false: `DuckFlight host factory requires DuckDB v2.0.0; host is v2.0.1`
 
-The extension loaded but its core only runs on the exact DuckDB release it was built for. This
-happens on DuckDB 2.0.1 until its build is published, because Community serves an older one. Use a DuckDB version from the
-[compatibility table](INSTALL.md#which-build-you-get).
+The extension loaded, but this build's core only runs on DuckDB 2.0.0. Community still serves
+it for DuckDB 2.0.1. Install 0.1.21 or later from the
+[Sidequery repository](INSTALL.md#sidequery-repository), which runs on both.
 
 ### `Failed to install remote extension "duckflight"`
 
 The repository has no build for your DuckDB version and platform. The Sidequery repository carries
-DuckDB 2.0.0 builds only. Check `pragma version;` against the
+builds for DuckDB 2.0.0 and 2.0.1 only. Check `pragma version;` against the
 [compatibility table](INSTALL.md#which-build-you-get).
 
 ### `duckflight_http_serve` or `duckflight_quack_serve` does not exist
 
 You are on DuckDB 1.5.6, which receives DuckFlight 0.1.12 with the PostgreSQL and Flight SQL
-listeners only. HTTP and Quack need DuckDB 2.0.0.
+listeners only. HTTP and Quack need DuckDB 2.0.0 or later.
 
 ## Starting a listener
 
@@ -104,8 +104,9 @@ The token passed to `quack_query` or `attach` is not in the listener's config.
 
 ### Quack: `Quack session SQL is outside its fixed capability`
 
-`attach ... (type quack)` was given a token without `query:mutate`. Attaching needs that scope even
-for reads. `quack_query` works with a read-only token.
+A write through a catalog attached with `type quack` used a token without `query:mutate`. On
+DuckFlight 0.1.20 and earlier, attaching itself needs that scope, even for reads; from 0.1.21 a
+read-only token can attach and query.
 
 ### Quack: `Unsupported protocol error for HTTP POST`
 
@@ -116,8 +117,8 @@ HTTP for `localhost` and to HTTPS for every other host. For a TLS listener on `l
 
 ### Quack: `invalid SQL` on `insert` into an attached catalog
 
-`insert into remote.main.t values (...)` through a catalog attached with `type quack` currently
-fails. Run the statement with `quack_query` instead.
+On DuckFlight 0.1.20 and earlier, `insert into remote.main.t values (...)` through a catalog
+attached with `type quack` fails. Upgrade to 0.1.21, or run the statement with `quack_query`.
 
 ### Airport will not load on DuckDB 2.0
 
