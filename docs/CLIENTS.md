@@ -235,8 +235,8 @@ Quack is DuckDB's own client/server protocol. A second DuckDB instance connects 
 `quack` extension, so results stay in DuckDB's native format end to end. The listener accepts the
 same credentials as HTTP.
 
-`quack_query` works with a read-only token. Attaching a catalog needs a token with `query:mutate`,
-even if you only read through it. Create one and put it in `DUCKFLIGHT_TOKEN`:
+A read-only token is enough for `quack_query` and for reading through an attached catalog.
+Writing needs `query:mutate`. Create a token that can write and put it in `DUCKFLIGHT_TOKEN`:
 
 ```sh doctest
 uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.21/scripts/duckflight_auth.py token add duckdb \
@@ -307,9 +307,9 @@ from quack_query(
 openssl x509 -in server.crt -noout -fingerprint -sha256
 ```
 
-Send writes through `quack_query`, or create tables through
-an attached catalog with `create table remote.main.t as ...`. A plain
-`insert into remote.main.trips values (...)` through an attached catalog currently fails with
+Inserts, updates, deletes and `create table ... as` work through an attached catalog, including
+inserts of rows that exist only on the client. These need DuckFlight 0.1.21; on 0.1.20, attaching
+needs `query:mutate` even for reads and a plain `insert` through the catalog fails with
 `invalid SQL`.
 
 ## Health checks

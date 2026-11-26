@@ -10,19 +10,24 @@ release exactly, so the DuckFlight version you receive depends on the DuckDB you
 
 | Your DuckDB | Channel | DuckFlight | Signed by | Protocols |
 | --- | --- | --- | --- | --- |
-| 2.0.0 | [Community](#duckdb-community-extensions) | 0.1.20 | DuckDB | PostgreSQL, Flight SQL, HTTP, Quack |
-| 2.0.0 | [Sidequery repository](#sidequery-repository) | 0.1.20 | Sidequery | PostgreSQL, Flight SQL, HTTP, Quack |
-| 2.0.0 | [GitHub release artifact](#github-release-artifacts) | 0.1.20 | Unsigned | PostgreSQL, Flight SQL, HTTP, Quack |
+| 2.0.1 | [Sidequery repository](#sidequery-repository) | 0.1.21 | Sidequery | PostgreSQL, Flight SQL, HTTP, Quack |
+| 2.0.1 | [GitHub release artifact](#github-release-artifacts) | 0.1.21 | Unsigned | PostgreSQL, Flight SQL, HTTP, Quack |
+| 2.0.1 | [Community](#duckdb-community-extensions) | 0.1.17 | DuckDB | None: the core does not start |
+| 2.0.0 | Sidequery repository | 0.1.21 | Sidequery | PostgreSQL, Flight SQL, HTTP, Quack |
+| 2.0.0 | GitHub release artifact | 0.1.21 | Unsigned | PostgreSQL, Flight SQL, HTTP, Quack |
+| 2.0.0 | Community | 0.1.20 | DuckDB | PostgreSQL, Flight SQL, HTTP, Quack |
 | 1.5.6 | Community | 0.1.12 | DuckDB | PostgreSQL, Flight SQL |
 | 1.5.6 | [Docker image](DOCKER.md) | Built from source | Unsigned | PostgreSQL, Flight SQL |
-| 2.0.1 | Community | 0.1.17 | DuckDB | None: the core does not start |
+
+From 0.1.21, one file per platform serves both DuckDB 2.0.0 and 2.0.1.
+[SQL access controls](ACCESS_CONTROL.md) need DuckDB 2.0.1.
 
 Supported platforms are Linux and macOS on amd64 and arm64 (`linux_amd64`, `linux_arm64`,
 `osx_amd64`, `osx_arm64`). Windows, WebAssembly and Linux musl are not supported.
 
-On DuckDB 2.0.1 the extension loads but `duckflight_core_status()` reports
-`DuckFlight host factory requires DuckDB v2.0.0; host is v2.0.1`. A 2.0.1 build is on the way; use
-DuckDB 2.0.0 until it is published.
+On DuckDB 2.0.1, the Community build loads but `duckflight_core_status()` reports
+`DuckFlight host factory requires DuckDB v2.0.0; host is v2.0.1`. Install 0.1.21 from the
+[Sidequery repository](#sidequery-repository) instead, until Community publishes it.
 
 ## Check your installation
 
@@ -48,12 +53,12 @@ install duckflight from community;
 load duckflight;
 ```
 
-This is the recommended channel. To pick up a newer release later, run
+This is the recommended channel on DuckDB 2.0.0 and 1.5.6. To pick up a newer release later, run
 `update extensions (duckflight);` and restart DuckDB.
 
 ## Sidequery repository
 
-Sidequery publishes signed DuckDB 2.0.0 builds at `https://extensions.sidequery.dev`. Enable custom
+Sidequery publishes signed DuckDB 2.0.0 and 2.0.1 builds at `https://extensions.sidequery.dev`. Enable custom
 repositories and register it:
 
 ```sql
@@ -89,8 +94,7 @@ protection for that process.
 
 1. Download the asset for your platform from the
    [latest release](https://github.com/sidequery/duckflight-extension/releases/latest). Assets are
-   named `duckflight-v<duckdb version>-<platform>.duckdb_extension`; both parts must match your
-   DuckDB.
+   named `duckflight-<platform>.duckdb_extension` and run on DuckDB 2.0.0 and 2.0.1.
 2. Verify the download against the release's `SHA256SUMS`.
 3. Rename the file to `duckflight.duckdb_extension`.
 4. Start DuckDB with `duckdb -unsigned` and load the file by absolute path:

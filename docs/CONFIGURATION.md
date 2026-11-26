@@ -179,9 +179,9 @@ keep the default rule, and catalog metadata still describes only the connected d
 
 ### `[acl]`
 
-Enables SQL-managed roles. Requires a DuckDB 2.0.1 build; see
-[SQL access controls](ACCESS_CONTROL.md). DuckFlight 0.1.20 on DuckDB 2.0.0 rejects a file
-containing this table with `Failed to parse DuckFlight config`.
+Enables SQL-managed roles. Requires DuckFlight 0.1.21 or later on DuckDB 2.0.1; see
+[SQL access controls](ACCESS_CONTROL.md). DuckFlight 0.1.20 rejects a file containing this
+table with `Failed to parse DuckFlight config`.
 
 ```toml
 [acl]
