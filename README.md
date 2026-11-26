@@ -77,8 +77,8 @@ supported.
 
 | Your DuckDB | Install from | DuckFlight version | Notes |
 | --- | --- | --- | --- |
-| 2.0.1 | Sidequery repository | 0.1.21 | All four protocols and [SQL access controls](docs/ACCESS_CONTROL.md). Community still serves 0.1.17 here, which loads but cannot start its core |
-| 2.0.0 | Sidequery repository | 0.1.21 | All four protocols. Community serves 0.1.20 until its 0.1.21 update is published |
+| 2.0.1 | Community or Sidequery repository | 0.1.21 | All four protocols and [SQL access controls](docs/ACCESS_CONTROL.md) |
+| 2.0.0 | Sidequery repository | 0.1.21 | All four protocols. Community serves 0.1.20 for this DuckDB version |
 | 1.5.6 | Community | 0.1.12 | PostgreSQL and Flight SQL only |
 
 Check what you have with:

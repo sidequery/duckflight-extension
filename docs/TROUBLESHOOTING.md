@@ -12,9 +12,9 @@ select * from duckflight_servers();
 
 ### `loaded` is false: `DuckFlight host factory requires DuckDB v2.0.0; host is v2.0.1`
 
-The extension loaded, but this build's core only runs on DuckDB 2.0.0. Community still serves
-it for DuckDB 2.0.1. Install 0.1.21 or later from the
-[Sidequery repository](INSTALL.md#sidequery-repository), which runs on both.
+The extension loaded, but this build's core only runs on DuckDB 2.0.0. It is DuckFlight 0.1.17,
+which Community served for DuckDB 2.0.1 before 0.1.21. Run `update extensions (duckflight);`
+and restart DuckDB to get 0.1.21, which runs on both.
 
 ### `Failed to install remote extension "duckflight"`
 
