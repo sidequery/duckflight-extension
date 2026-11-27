@@ -346,7 +346,7 @@ class Scenario:
         listeners = host.execute("select protocol from duckflight_servers()").fetchall()
         if ("pgwire",) not in listeners:
             host.execute(
-                "select * from duckflight_serve('pgwire', ?, config_file := ?)",
+                "select * from duckflight_pg_serve(?, ?)",
                 [PG_ADDRESS, "duckflight.toml"],
             )
         address, port = PG_ADDRESS.rsplit(":", 1)
