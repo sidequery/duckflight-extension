@@ -28,10 +28,10 @@ select * from duckflight_init('alice');
 here `.duckflight/store.duckdb` in the current directory; see
 [Authentication](docs/AUTHENTICATION.md#the-account-store).
 
-**2. Start a PostgreSQL listener.** There is no config file yet, so the second argument is `''`:
+**2. Start a PostgreSQL listener.** No config file is needed:
 
 ```sql doctest=host
-select * from duckflight_pg_serve('127.0.0.1:5433', '');
+select * from duckflight_serve('postgres', '127.0.0.1:5433');
 ```
 
 The function returns one row with the protocol and bound address once the listener is accepting
@@ -64,7 +64,7 @@ nothing needs restarting. `show users;` lists the accounts.
 
 ```sql doctest=host
 select * from duckflight_servers();
-select * from duckflight_stop('pgwire', '127.0.0.1:5433');
+select * from duckflight_stop('postgres', '127.0.0.1:5433');
 ```
 
 The account store stays in the directory. When you start DuckDB there again, `alice` and `bob`
@@ -78,12 +78,12 @@ from other machines, add a TLS certificate: see [Authentication](docs/AUTHENTICA
 
 All listeners serve the same database and can run at the same time.
 
-| Protocol | Start function | Clients | Credentials accepted |
+| Protocol | Name for `duckflight_serve` | Clients | Credentials accepted |
 | --- | --- | --- | --- |
-| PostgreSQL wire | `duckflight_pg_serve` | `psql`, Psycopg, JDBC, SQLAlchemy, BI tools | Passwords, OIDC, mTLS |
-| Arrow Flight SQL | `duckflight_flight_serve` | ADBC drivers, DuckDB's Airport extension | Passwords, bearer tokens, OIDC, mTLS |
-| HTTP (Arrow IPC) | `duckflight_http_serve` | Anything that can `POST` JSON and read Arrow | Bearer tokens, OIDC, mTLS |
-| Quack | `duckflight_quack_serve` | Another DuckDB, through its `quack` extension | Bearer tokens, OIDC, mTLS |
+| PostgreSQL wire | `postgres` | `psql`, Psycopg, JDBC, SQLAlchemy, BI tools | Passwords, OIDC, mTLS |
+| Arrow Flight SQL | `flight` | ADBC drivers, DuckDB's Airport extension | Passwords, bearer tokens, OIDC, mTLS |
+| HTTP (Arrow IPC) | `http` | Anything that can `POST` JSON and read Arrow | Bearer tokens, OIDC, mTLS |
+| Quack | `quack` | Another DuckDB, through its `quack` extension | Bearer tokens, OIDC, mTLS |
 
 Working connection examples for each are in [Clients](docs/CLIENTS.md).
 
@@ -139,9 +139,8 @@ where users and tokens lived in `duckflight.toml`, is covered
 
 ## SQL API
 
-Seven table functions control the servers: `duckflight_pg_serve`, `duckflight_flight_serve`,
-`duckflight_http_serve`, `duckflight_quack_serve`, `duckflight_servers`, `duckflight_stop`, and
-`duckflight_core_status`. Six more set up accounts from the host: `duckflight_init`,
+Four table functions control the servers: `duckflight_serve`, `duckflight_servers`,
+`duckflight_stop`, and `duckflight_core_status`. Six more set up accounts from the host: `duckflight_init`,
 `duckflight_user_add`, `duckflight_token_add`, `duckflight_accounts`, `duckflight_import` and
 `duckflight_config_check`. Apart from `duckflight_core_status`, these run only in the host
 process; a client connected through a listener cannot call them. Their arguments and results,

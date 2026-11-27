@@ -11,12 +11,12 @@ DuckFlight is configured in four places:
 
 ## duckflight.toml
 
-The path is the second argument to every `duckflight_*_serve` function. The file is optional: a
-listener on a loopback address that authenticates against the account store needs none, and takes
-`''` instead:
+The path is the `config_file` argument of `duckflight_serve`. The file is optional: a
+listener on a loopback address that authenticates against the account store needs none.
 
 ```sql
-select * from duckflight_pg_serve('127.0.0.1:5433', '');
+select * from duckflight_serve('postgres', '127.0.0.1:5433');
+select * from duckflight_serve('postgres', '127.0.0.1:5433', config_file := 'duckflight.toml');
 ```
 
 Relative paths inside the file are resolved against the file's own directory. Unknown top-level

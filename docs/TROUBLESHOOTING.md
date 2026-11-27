@@ -30,16 +30,23 @@ The installed DuckFlight is older than 0.2.0. The same error comes from `duckfli
 older build, users and tokens come from the
 [config file](CONFIGURATION.md#legacy-users-and-tokens) instead.
 
-### `duckflight_http_serve` or `duckflight_quack_serve` does not exist
+### `duckflight_serve` does not exist
 
-You are on DuckDB 1.5.6, which receives DuckFlight 0.1.12 with the PostgreSQL and Flight SQL
-listeners only. HTTP and Quack need DuckDB 2.0.0 or later.
+The installed DuckFlight is older than 0.2.0. Update it, or start listeners the older way with
+`duckflight_pg_serve(address, config_file)` and `duckflight_flight_serve(address, config_file)`.
+DuckDB 1.5.6 receives DuckFlight 0.1.12 with the PostgreSQL and Flight SQL listeners only; HTTP
+and Quack need DuckDB 2.0.0 or later.
+
+### `duckflight_pg_serve` does not exist
+
+DuckFlight 0.2.0 replaced the four per-protocol functions with
+[`duckflight_serve(protocol, address)`](SQL_FUNCTIONS.md#starting).
 
 ## Starting a listener
 
 | Error | Cause | Fix |
 | --- | --- | --- |
-| `Failed to read DuckFlight config: <path>` | The file is missing or cannot be read | Check the path, which is relative to the DuckDB process's working directory. Pass `''` to serve without a file |
+| `Failed to read DuckFlight config: <path>` | The file is missing or cannot be read | Check the path, which is relative to the DuckDB process's working directory. Leave `config_file` out to serve without a file |
 | `Failed to parse DuckFlight config: <path>` | The file is not valid, or has a section this version does not support, such as `[acl]` on DuckFlight 0.1.20 | Run `select * from duckflight_config_check('<path>')` and remove unsupported sections |
 | `DuckFlight extension listeners require at least one user, token, OIDC provider, mTLS identity, or initialized account store` | The account store has no user, and the config file configures no OIDC provider or mTLS identity | [Create the first administrator](AUTHENTICATION.md#create-the-first-administrator) with `duckflight_init` |
 | `DuckFlight extension listeners require at least one user, token, OIDC provider, or mTLS identity in the configuration file` | A build before 0.2.0, such as the Docker image, found no credentials in the config file | [Add a user or token](AUTHENTICATION.md#the-helper) to the file |
@@ -49,7 +56,7 @@ listeners only. HTTP and Quack need DuckDB 2.0.0 or later.
 | `all listeners on one DuckFlight host must use the same account store` | This listener's config file resolves to a different [account store](AUTHENTICATION.md#where-it-lives) than the listeners already running | Start every listener with config files that name the same store, or none |
 | `store database parent directory must be private (0700)` | The directory holding the account store, from `[store] path` or `acl.store`, can be read by other users | `chmod 700` the directory, or name a directory that does not exist yet so DuckFlight creates it |
 | `Address already in use` | Another process, or an earlier listener, holds the port | Pick another port, or stop the old listener with `duckflight_stop` |
-| `unsupported DuckFlight extension protocol: <name>` | `duckflight_stop` was given an unknown protocol | Use `pgwire`, `flight`, `http` or `quack` |
+| `unsupported DuckFlight extension protocol: <name>` | `duckflight_serve` or `duckflight_stop` was given an unknown protocol | Use `postgres`, `flight`, `http` or `quack` |
 
 `duckflight_stop` returning `no pgwire server on <address>` means nothing is listening at exactly
 that address. Copy the address from `duckflight_servers()`; a listener started on a hostname or on
@@ -64,8 +71,8 @@ not the listener; check the file with `duckflight_config_check` instead.
 ### Connection refused
 
 Nothing is listening on that address. The server lives inside the DuckDB process that called
-`duckflight_*_serve`, so it stops when that process exits or its session is closed. Confirm with
-`duckflight_servers()` that the listener is still registered, and wait for the start function to
+`duckflight_serve`, so it stops when that process exits or its session is closed. Confirm with
+`duckflight_servers()` that the listener is still registered, and wait for `duckflight_serve` to
 return its row before connecting.
 
 ### `FATAL:  Password authentication failed for user ""`

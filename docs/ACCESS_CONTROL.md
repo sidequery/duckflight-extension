@@ -43,7 +43,7 @@ create table orders as select 42 as id, 'account-1234' as account_number;
 select * from duckflight_init('ops', config_file := 'acl-demo/duckflight.toml');
 select * from duckflight_user_add('bob', config_file := 'acl-demo/duckflight.toml');
 
-select * from duckflight_pg_serve('127.0.0.1:5433', 'acl-demo/duckflight.toml');
+select * from duckflight_serve('postgres', '127.0.0.1:5433', config_file := 'acl-demo/duckflight.toml');
 ```
 
 `ops` is an administrator and `bob` a `reader`. Each function returns the user's generated password

@@ -54,10 +54,10 @@ password. To choose the password yourself, put it in a file readable only by you
 select * from duckflight_init('alice', password_file := 'alice.password');
 ```
 
-Then start listeners. With no config file, pass `''` as the second argument:
+Then start listeners. No config file is needed:
 
 ```sql
-select * from duckflight_pg_serve('127.0.0.1:5433', '');
+select * from duckflight_serve('postgres', '127.0.0.1:5433');
 ```
 
 `duckflight_init` works only once per store. To add an administrator later, use
@@ -237,7 +237,7 @@ use the same store:
 
 ```sql
 select * from duckflight_init('alice', config_file := 'duckflight.toml');
-select * from duckflight_pg_serve('127.0.0.1:5433', 'duckflight.toml');
+select * from duckflight_serve('postgres', '127.0.0.1:5433', config_file := 'duckflight.toml');
 ```
 
 `duckflight_config_check('duckflight.toml')` reports which store a file resolves to in its
@@ -304,7 +304,7 @@ key = "server.key"
 ```
 
 ```sql
-select * from duckflight_pg_serve('0.0.0.0:5433', 'duckflight.toml');
+select * from duckflight_serve('postgres', '0.0.0.0:5433', config_file := 'duckflight.toml');
 ```
 
 Relative paths are resolved against the directory containing `duckflight.toml`, not the process
@@ -422,8 +422,17 @@ The account store and the config file both hold material an attacker can use.
 ## Upgrading from 0.1.x
 
 DuckFlight 0.1.x kept users and tokens in the `[users]` and `[tokens]` tables of `duckflight.toml`.
-Those tables keep working after the upgrade until the account store is initialized, so nothing
-breaks when you install 0.2.0.
+Those tables keep working after the upgrade until the account store is initialized.
+
+One call changes when you install 0.2.0. A single function now starts every listener, so
+replace the per-protocol functions:
+
+| 0.1.x | 0.2.0 |
+| --- | --- |
+| `duckflight_pg_serve(address, file)` | `duckflight_serve('postgres', address, config_file := file)` |
+| `duckflight_flight_serve(address, file)` | `duckflight_serve('flight', address, config_file := file)` |
+| `duckflight_http_serve(address, file)` | `duckflight_serve('http', address, config_file := file)` |
+| `duckflight_quack_serve(address, file)` | `duckflight_serve('quack', address, config_file := file)` |
 
 To move them into the store, run in the host process:
 

@@ -21,8 +21,8 @@ export DUCKFLIGHT_PROFILE_SAMPLE_RATIO=0.05
 
 ```sql
 load duckflight;
-select * from duckflight_pg_serve('127.0.0.1:5433', '');
-select * from duckflight_flight_serve('127.0.0.1:31337', '');
+select * from duckflight_serve('postgres', '127.0.0.1:5433');
+select * from duckflight_serve('flight', '127.0.0.1:31337');
 ```
 
 | Environment variable | Default | Meaning |

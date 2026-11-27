@@ -26,13 +26,13 @@ load duckflight;
 
 select * from duckflight_core_status();
 select * from duckflight_init('alice');
-select * from duckflight_pg_serve('127.0.0.1:5433', '');
-select * from duckflight_flight_serve('127.0.0.1:31337', '');
-select * from duckflight_http_serve('127.0.0.1:4080', '');
-select * from duckflight_quack_serve('127.0.0.1:4081', '');
+select * from duckflight_serve('postgres', '127.0.0.1:5433');
+select * from duckflight_serve('flight', '127.0.0.1:31337');
+select * from duckflight_serve('http', '127.0.0.1:4080');
+select * from duckflight_serve('quack', '127.0.0.1:4081');
 select * from duckflight_servers();
 
-select * from duckflight_stop('pgwire', '127.0.0.1:5433');
+select * from duckflight_stop('postgres', '127.0.0.1:5433');
 select * from duckflight_stop('flight', '127.0.0.1:31337');
 select * from duckflight_stop('http', '127.0.0.1:4080');
 select * from duckflight_stop('quack', '127.0.0.1:4081');
@@ -41,10 +41,7 @@ select * from duckflight_stop('quack', '127.0.0.1:4081');
 | Function | Arguments | Returned columns |
 | --- | --- | --- |
 | `duckflight_core_status()` | None | `loaded` (boolean), `abi_version` (unsigned bigint), `detail` (varchar) |
-| `duckflight_pg_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
-| `duckflight_flight_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
-| `duckflight_http_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
-| `duckflight_quack_serve(address, config_file)` | Two varchar values | `protocol`, `address` (varchar) |
+| `duckflight_serve(protocol, address, config_file := '')` | Two varchar values and an optional named varchar | `protocol`, `address` (varchar) |
 | `duckflight_servers()` | None | `protocol`, `address` (varchar), one row per listener |
 | `duckflight_stop(protocol, address)` | Two varchar values | `status` (varchar) |
 
@@ -52,16 +49,27 @@ select * from duckflight_stop('quack', '127.0.0.1:4081');
 
 `address` is `host:port`. Port `0` asks the operating system for a free port. The returned address
 is authoritative: use it to connect and to stop, including when a hostname resolved to an IP
-address. A start function returns once its background listener is running.
+address. `duckflight_serve` returns once its background listener is running.
 
-`config_file` is the path to [`duckflight.toml`](CONFIGURATION.md#duckflighttoml), or `''` for
-none. Either way the listener authenticates users and tokens against the host's
+`protocol` names the listener to start:
+
+| Listener | Protocol name |
+| --- | --- |
+| PostgreSQL | `postgres` (also `postgresql` or `pgwire`) |
+| Flight SQL | `flight` |
+| HTTP | `http` |
+| Quack | `quack` |
+
+Results and status messages report the PostgreSQL listener as `pgwire`.
+
+`config_file` is the path to [`duckflight.toml`](CONFIGURATION.md#duckflighttoml). It is
+optional. Either way the listener authenticates users and tokens against the host's
 [account store](#account-store), which needs a user first; see `duckflight_init`. The file adds
-TLS, OIDC, timeouts and the other [listener settings](CONFIGURATION.md). The serve functions
-always take both arguments, so pass `''` rather than leaving it out:
+TLS, OIDC, timeouts and the other [listener settings](CONFIGURATION.md):
 
 ```sql
-select * from duckflight_pg_serve('127.0.0.1:5433', '');
+select * from duckflight_serve('postgres', '127.0.0.1:5433');
+select * from duckflight_serve('flight', '127.0.0.1:31337', config_file := 'duckflight.toml');
 ```
 
 Every listener requires authentication, and a non-loopback address also requires TLS; see
@@ -70,22 +78,17 @@ the file configures an OIDC provider, an mTLS identity, or
 [legacy users and tokens](CONFIGURATION.md#legacy-users-and-tokens). The HTTP and Quack
 listeners accept bearer tokens, OIDC and mTLS, but not passwords.
 
-DuckDB 1.5.6 builds provide the PostgreSQL and Flight SQL functions only.
+DuckDB 1.5.6 receives DuckFlight 0.1.12, which starts listeners with the older
+`duckflight_pg_serve(address, config_file)` and `duckflight_flight_serve(address, config_file)`
+instead.
 
 ### Stopping
 
-`duckflight_stop` takes the protocol name and the address the start function returned.
-
-| Listener | Protocol name |
-| --- | --- |
-| PostgreSQL | `pgwire` (also `postgres` or `postgresql`) |
-| Flight SQL | `flight` |
-| HTTP | `http` |
-| Quack | `quack` |
+`duckflight_stop` takes the same protocol name and the address `duckflight_serve` returned.
 
 A successful stop returns `stopped <protocol> server on <address>`. Stopping an address that is not
 registered returns a `no ... server on ...` status rather than an error. ADBC clients connect to
-the Flight SQL listener; there is no separate `adbc` protocol or `duckflight_adbc_serve` function.
+the Flight SQL listener; there is no separate `adbc` protocol.
 
 How long a stopping listener waits for running queries is set by
 [`shutdown_grace_secs`](CONFIGURATION.md#top-level). Closing DuckDB stops every listener.

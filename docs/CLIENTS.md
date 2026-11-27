@@ -22,9 +22,9 @@ export DUCKFLIGHT_TOKEN='the token returned above'
 create table if not exists trips as
     select * from (values (1, 'Lisbon'), (2, 'Osaka')) t(id, city);
 
-select * from duckflight_pg_serve('127.0.0.1:5433', '');
-select * from duckflight_flight_serve('127.0.0.1:31337', '');
-select * from duckflight_http_serve('127.0.0.1:4080', '');
+select * from duckflight_serve('postgres', '127.0.0.1:5433');
+select * from duckflight_serve('flight', '127.0.0.1:31337');
+select * from duckflight_serve('http', '127.0.0.1:4080');
 ```
 
 Listeners look accounts up at every login, so users and tokens created while they run work at once.
@@ -246,7 +246,7 @@ Writing needs a `writer` or `admin` token, such as `alice`'s from above. Start t
 host:
 
 ```sql doctest=host
-select * from duckflight_quack_serve('127.0.0.1:4081', '');
+select * from duckflight_serve('quack', '127.0.0.1:4081');
 ```
 
 From another DuckDB, run a single query:
