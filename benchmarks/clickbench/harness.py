@@ -140,8 +140,8 @@ def serve(state: Path, nonce: str) -> None:
     try:
         process.stdin.write(
             f"load {sql_string(state / 'duckflight.duckdb_extension')};\n"
-            "copy (select address from duckflight_flight_serve('127.0.0.1:0', "
-            f"{sql_string(state / 'auth.toml')})) to {sql_string(listener)} (format csv, header false);\n"
+            "copy (select address from duckflight_serve('flight', '127.0.0.1:0', "
+            f"config_file := {sql_string(state / 'auth.toml')})) to {sql_string(listener)} (format csv, header false);\n"
         )
         process.stdin.flush()
         deadline = time.monotonic() + 25

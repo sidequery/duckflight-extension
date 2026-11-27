@@ -1,0 +1,53 @@
+# The mock core claiming every connection, as the core does for a statement that arrived through
+# one of its listeners. `make test_debug` runs this file with DUCKFLIGHT_MOCK_CORE set; the
+# default run skips it.
+require-env DUCKFLIGHT_MOCK_CORE owns-connections
+
+require duckflight
+
+# The status function reports no listener details and stays available.
+query TT
+select loaded::varchar, abi_version::varchar from duckflight_core_status();
+----
+true	1
+
+statement error
+select * from duckflight_serve('pgwire', '127.0.0.1:0');
+----
+only be called from the process that owns the database
+
+statement error
+select * from duckflight_config_check('duckflight.toml');
+----
+only be called from the process that owns the database
+
+statement error
+select * from duckflight_init('alice');
+----
+only be called from the process that owns the database
+
+statement error
+select * from duckflight_user_add('bob', role := 'admin');
+----
+only be called from the process that owns the database
+
+statement error
+select * from duckflight_token_add('alice', 'mine');
+----
+only be called from the process that owns the database
+
+statement error
+select * from duckflight_accounts();
+----
+only be called from the process that owns the database
+
+statement error
+select * from duckflight_import('legacy.toml');
+----
+only be called from the process that owns the database
+
+# Describing a function binds it, so it is refused too.
+statement error
+describe select * from duckflight_accounts();
+----
+only be called from the process that owns the database

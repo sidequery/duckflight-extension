@@ -1,0 +1,64 @@
+# The mock core acting as a core built before the account store: its function table ends before
+# the account store entries, though the bytes after it hold them. `make test_debug` runs this file
+# with DUCKFLIGHT_MOCK_CORE set; the default run skips it.
+require-env DUCKFLIGHT_MOCK_CORE before-account-store
+
+require duckflight
+
+# Everything the older core provides keeps working.
+query TT
+select loaded::varchar, abi_version::varchar from duckflight_core_status();
+----
+true	1
+
+query TT
+select * from duckflight_serve('pgwire', '127.0.0.1:0', config_file := 'duckflight.toml');
+----
+pgwire	127.0.0.1:15432
+
+query T
+select * from duckflight_stop('pgwire', '127.0.0.1:15432');
+----
+stopped pgwire server on 127.0.0.1:15432
+
+query TT
+select * from duckflight_token_create('duckflight.toml', 'ci');
+----
+ci	mock-token:ci:
+
+query TT
+select * from duckflight_user_create('duckflight.toml', 'alice');
+----
+alice	mock-password:alice
+
+# Its config check fills only the summary it knows, so the store columns are null.
+query IIIIITIIIII
+select * from duckflight_config_check('with-tls.toml');
+----
+2	1	0	true	false	NULL	NULL	NULL	NULL	NULL	NULL
+
+# Each account store function says the core does not support it.
+statement error
+select * from duckflight_init('alice');
+----
+duckflight_init is not supported by the installed DuckFlight core, which predates the account store
+
+statement error
+select * from duckflight_user_add('bob', role := 'writer');
+----
+duckflight_user_add is not supported by the installed DuckFlight core
+
+statement error
+select * from duckflight_token_add('bob', 'nightly');
+----
+duckflight_token_add is not supported by the installed DuckFlight core
+
+statement error
+select * from duckflight_accounts();
+----
+duckflight_accounts is not supported by the installed DuckFlight core
+
+statement error
+select * from duckflight_import('legacy.toml');
+----
+duckflight_import is not supported by the installed DuckFlight core

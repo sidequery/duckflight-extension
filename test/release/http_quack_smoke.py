@@ -210,8 +210,8 @@ def run(
             addresses = {}
             for protocol in ("http", "quack"):
                 row = host.execute(
-                    f"select * from duckflight_{protocol}_serve(?, ?)",
-                    ["0.0.0.0:0" if tls else "127.0.0.1:0", str(config)],
+                    "select * from duckflight_serve(?, ?, config_file := ?)",
+                    [protocol, "0.0.0.0:0" if tls else "127.0.0.1:0", str(config)],
                 ).fetchone()
                 assert row is not None and row[0] == protocol
                 addresses[protocol] = row[1]
@@ -301,8 +301,8 @@ def run(
             # Each restart gets a fresh listener lifetime and can reuse its port.
             for protocol, address in addresses.items():
                 assert host.execute(
-                    f"select * from duckflight_{protocol}_serve(?, ?)",
-                    [address, str(config)],
+                    "select * from duckflight_serve(?, ?, config_file := ?)",
+                    [protocol, address, str(config)],
                 ).fetchone() == (protocol, address)
             status, raw = request(urls["http"] + "/tx/begin", {}, token, context)
             assert status == 200, (status, raw)

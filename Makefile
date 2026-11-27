@@ -32,6 +32,20 @@ include extension-ci-tools/makefiles/c_api_extensions/rust.Makefile
 TEST_RUNNER_RELEASE=duckdb_test_cli="$$(bash scripts/prepare-test-host.sh)" && \
 	$(PYTHON_VENV_BIN) test/release/cli_smoke.py "$$duckdb_test_cli" build/release/$(EXTENSION_NAME).duckdb_extension
 
+# The mock core can also act as an older core or as a listener session. Each file in
+# test/sql/mock_core names its mode with require-env, so the default run skips it; run it again
+# in that mode, and fail if it is skipped there too.
+MOCK_CORE_MODES=before-account-store null-account-entries owns-connections
+TEST_RUNNER_DEBUG=$(TEST_RUNNER_BASE) --external-extension build/debug/$(EXTENSION_NAME).duckdb_extension && \
+	for mode in $(MOCK_CORE_MODES); do \
+		output="$$(DUCKFLIGHT_MOCK_CORE=$$mode $(TEST_RUNNER_BASE) --file-path test/sql/mock_core/$$mode.test \
+			--external-extension build/debug/$(EXTENSION_NAME).duckdb_extension 2>&1)"; \
+		status=$$?; printf '%s\n' "$$output"; \
+		if [ $$status -ne 0 ] || ! printf '%s\n' "$$output" | grep -qx SUCCESS; then \
+			echo "mock core mode $$mode did not pass" >&2; exit 1; \
+		fi; \
+	done
+
 configure: venv platform extension_version
 
 debug: build_extension_library_debug build_extension_with_metadata_debug

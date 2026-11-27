@@ -434,11 +434,11 @@ def run(extension: Path) -> None:
             prepare_flight_fixture(host)
 
             pg_address = host.execute(
-                "select address from duckflight_pg_serve('127.0.0.1:0', ?)",
+                "select address from duckflight_serve('pgwire', '127.0.0.1:0', config_file := ?)",
                 [str(config_path)],
             ).fetchone()[0]
             flight_address = host.execute(
-                "select address from duckflight_flight_serve('127.0.0.1:0', ?)",
+                "select address from duckflight_serve('flight', '127.0.0.1:0', config_file := ?)",
                 [str(config_path)],
             ).fetchone()[0]
 

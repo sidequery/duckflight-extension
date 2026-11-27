@@ -82,11 +82,11 @@ def main():
         extension = str(Path(sys.argv[1]).resolve()).replace("'", "''")
         host.execute(f"load '{extension}'")
         addresses["pgwire"] = host.execute(
-            "select address from duckflight_pg_serve('127.0.0.1:0', ?)",
+            "select address from duckflight_serve('pgwire', '127.0.0.1:0', config_file := ?)",
             [str(config_path)],
         ).fetchone()[0]
         addresses["flight"] = host.execute(
-            "select address from duckflight_flight_serve('127.0.0.1:0', ?)",
+            "select address from duckflight_serve('flight', '127.0.0.1:0', config_file := ?)",
             [str(config_path)],
         ).fetchone()[0]
         pg_host, pg_port = addresses["pgwire"].rsplit(":", 1)
@@ -131,7 +131,7 @@ def main():
 
         # A stopped service flushes but does not shut down the shared providers.
         addresses["flight"] = host.execute(
-            "select address from duckflight_flight_serve('127.0.0.1:0', ?)",
+            "select address from duckflight_serve('flight', '127.0.0.1:0', config_file := ?)",
             [str(config_path)],
         ).fetchone()[0]
         with (

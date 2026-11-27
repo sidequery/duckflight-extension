@@ -25,7 +25,7 @@ from http_quack_smoke import request, test_host
 from quack_client import WRITE_SCOPES, QuackClient
 
 REFUSAL = "only be called from the process that owns the database"
-SERVE_FUNCTIONS = {"http": "http", "quack": "quack", "pgwire": "pg", "flight": "flight"}
+PROTOCOLS = ("http", "quack", "pgwire", "flight")
 
 
 def write_config(path: Path, token: str) -> None:
@@ -49,8 +49,10 @@ def statements(config: Path, quack_address: str) -> dict[str, str]:
     nonce = secrets.token_hex(4)
     stop = f"select * from duckflight_stop('quack', '{quack_address}')"
     cases = {
-        f"{function} serve": f"select * from duckflight_{function}_serve('127.0.0.1:0', '{config}')"
-        for function in SERVE_FUNCTIONS.values()
+        f"{protocol} serve": (
+            f"select * from duckflight_serve('{protocol}', '127.0.0.1:0', config_file := '{config}')"
+        )
+        for protocol in PROTOCOLS
     }
     cases |= {
         "list": f"select protocol as p_{nonce} from duckflight_servers()",
@@ -78,10 +80,10 @@ def run(cli: Path, extension: Path) -> None:
         with test_host(cli, fixtures, extension, None) as host:
             address = {
                 protocol: host.execute(
-                    f"select address from duckflight_{function}_serve('127.0.0.1:0', ?)",
-                    [str(config)],
+                    "select address from duckflight_serve(?, '127.0.0.1:0', config_file := ?)",
+                    [protocol, str(config)],
                 ).fetchone()[0]
-                for protocol, function in SERVE_FUNCTIONS.items()
+                for protocol in PROTOCOLS
             }
             host.execute("create view listener_view as select * from duckflight_servers()")
             host.execute(
