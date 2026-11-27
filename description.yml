@@ -1,7 +1,7 @@
 extension:
   name: duckflight
   description: Query DuckDB from PostgreSQL, Arrow Flight SQL, HTTP, and Quack clients
-  version: 0.1.21
+  version: 0.2.0
   language: Rust
   build: cargo
   license: MIT
@@ -18,11 +18,14 @@ repo:
 
 docs:
   hello_world: |
+    -- Create the first administrator; the generated password is shown once.
+    SELECT * FROM duckflight_init('alice');
+
     -- Let PostgreSQL clients query this DuckDB database.
-    SELECT * FROM duckflight_serve('pgwire', '127.0.0.1:5433', config_file := '/path/to/duckflight.toml');
+    SELECT * FROM duckflight_serve('postgres', '127.0.0.1:5433');
 
     -- Let Arrow Flight SQL clients query the same database.
-    SELECT * FROM duckflight_serve('flight', '127.0.0.1:31337', config_file := '/path/to/duckflight.toml');
+    SELECT * FROM duckflight_serve('flight', '127.0.0.1:31337');
   extended_description: |
     Use DuckDB as a database server. DuckFlight lets PostgreSQL, Arrow Flight SQL, HTTP, and Quack
     clients query the same live DuckDB database that loaded the extension—no export, copy, or
@@ -32,8 +35,10 @@ docs:
     Flight SQL clients; or another DuckDB instance through the Airport extension. Reads and writes
     are immediately visible to DuckDB and every connected client.
 
-    Listeners require authentication. A single `duckflight.toml` configures users, access
-    tokens, and optional TLS. See the
+    Listeners require authentication. Users, passwords and access tokens live in an account
+    store beside the database and are managed with SQL (`CREATE USER`, `CREATE TOKEN`), each
+    with the role `reader`, `writer` or `admin`. An optional `duckflight.toml` adds TLS, OIDC
+    and other listener settings. See the
     [quickstart](https://github.com/sidequery/duckflight-extension/blob/main/README.md#quickstart).
 
     HTTP returns Arrow IPC; Quack serves DuckDB's binary protocol at `/quack`.
@@ -47,10 +52,15 @@ docs:
     | `duckflight_stop(protocol, address)` | Stops the specified listener and returns its status. |
     | `duckflight_servers()` | Lists running listeners and their bound addresses. |
     | `duckflight_core_status()` | Reports whether the runtime loaded, its ABI version, and status details. |
+    | `duckflight_init(admin)` | Creates the account store's first administrator; returns the user and password. |
+    | `duckflight_user_add(name, role := 'reader')` | Adds a user; returns the user and password. |
+    | `duckflight_token_add(user, token_name)` | Adds a bearer token for a user; returns the token once. |
+    | `duckflight_accounts()` | Lists users, their roles and their credentials. |
+    | `duckflight_import(config_file)` | Moves users and tokens from an older `duckflight.toml` into the store. |
 
     The automatically detected functions below also include PostgreSQL compatibility macros
     and internal session/catalog helpers installed by the runtime. These support PostgreSQL
     queries and client metadata discovery; they are not additional server controls or a complete
     implementation of PostgreSQL functions. Their catalog comments describe each helper.
     The v1 table-function C API does not expose function-description setters,
-    so the seven native server functions are documented above.
+    so the native server and account functions are documented above.

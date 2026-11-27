@@ -101,6 +101,7 @@ jobs:
             uv run --python 3.12 test/release/quack_client.py "$cli" "$extension"
             uv run --python 3.12 test/release/host_only_functions.py "$cli" "$extension"
             uv run --python 3.12 test/release/setup_functions.py "$cli" "$extension"
+            uv run --python 3.12 test/release/account_store.py "$cli" "$extension"
             uv run --python 3.12 test/release/host_sessions.py "$extension" --duckdb-cli "$cli"
             uv run --python 3.12 test/release/oidc_health.py "$extension" --duckdb-cli "$cli"
             uv run --python 3.12 test/docs_snippets.py "$cli" "$extension" --skip-missing-tools

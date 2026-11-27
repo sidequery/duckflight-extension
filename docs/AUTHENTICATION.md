@@ -477,7 +477,7 @@ instead. It does not manage `[store]` tables. Run it from a release tag with
 [uv](https://docs.astral.sh/uv/):
 
 ```sh
-alias duckflight-auth='uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.21/scripts/duckflight_auth.py'
+alias duckflight-auth='uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.2.0/scripts/duckflight_auth.py'
 ```
 
 ```sh
