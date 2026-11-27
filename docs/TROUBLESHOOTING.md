@@ -210,9 +210,11 @@ the extension, whatever the client's role. Over a listener, an administrator use
 
 ### `permission denied: account statements require a store administrator`
 
-Account statements need a store user with the `admin` role. OIDC and mTLS identities cannot run
-them, even with the `admin` role. Other users can only change their own password, and only in a
-session that signed in with that password.
+Account statements need the `admin` role from the account store: a store user with that role,
+or an OIDC or mTLS identity it was
+[granted to](AUTHENTICATION.md#oidc-and-mtls-identities). Admin scopes from the config file's
+authorization rules are not enough. Other users can only change their own password, and only
+in a session that signed in with that password.
 
 ### `account statements cannot run inside a transaction`
 

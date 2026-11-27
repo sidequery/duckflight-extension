@@ -26,13 +26,13 @@ and tokens were written into `duckflight.toml`, see [Upgrading from 0.1.x](#upgr
 | Method | Works with | Sent on the wire | Set up with |
 | --- | --- | --- | --- |
 | [Password](#passwords) | PostgreSQL, Flight SQL | SCRAM-SHA-256 for PostgreSQL; a Basic header during the Flight handshake, then a server-issued bearer | `duckflight_init`, `CREATE USER` |
-| [Bearer token](#tokens) | Flight SQL, HTTP, Quack | The token on every request | `duckflight_token_add`, `CREATE TOKEN` |
+| [Bearer token](#tokens) | PostgreSQL (SASL OAUTHBEARER), Flight SQL, HTTP, Quack | The token on every request; once at startup for PostgreSQL | `duckflight_token_add`, `CREATE TOKEN` |
 | [OIDC](#oidc) | PostgreSQL (SASL OAUTHBEARER), Flight SQL, HTTP, Quack | The provider's access token | `[[oidc]]` in the config file |
 | [mTLS](#mtls) | Listeners with TLS | A client certificate, mapped by SHA-256 fingerprint | `[tls]` with `client_ca` and `identities` |
 
 One account can have a password, any number of named tokens, or both, so the same account can
 connect over all four listeners: with its password over PostgreSQL and Flight SQL, and with a token
-over Flight SQL, HTTP and Quack. HTTP and Quack never accept passwords.
+over any of them. HTTP and Quack never accept passwords.
 
 ## Accounts
 
@@ -101,7 +101,8 @@ remove the user with `DROP USER`.
 
 A few rules apply to every account statement:
 
-- **Administrators only.** Only a store user with the `admin` role can run them. Any other caller
+- **Administrators only.** Only a store user with the `admin` role, or an
+  [OIDC or mTLS identity granted it](#oidc-and-mtls-identities), can run them. Any other caller
   gets `permission denied: account statements require a store administrator`. The one exception:
   a user signed in with a password can change their own password with
   `ALTER USER <own name> SET PASSWORD`.
@@ -195,9 +196,10 @@ A token belongs to one user and acts with that user's role. DuckFlight generates
 256 bits of randomness and returns it once; the store keeps only its SHA-256 digest. Token names
 are unique per user and appear in `SHOW TOKENS`, so name them after the client that holds them.
 
-Tokens are accepted by the Flight SQL, HTTP and Quack listeners, sent as
-`authorization: Bearer <token>`. The PostgreSQL listener does not accept them; use the user's
-password there.
+Tokens are accepted by every listener. Flight SQL, HTTP and Quack take them as
+`authorization: Bearer <token>`. The PostgreSQL listener takes them through SASL `OAUTHBEARER`,
+with the token's user as the startup user. Few PostgreSQL clients can send a fixed bearer token
+that way, so most connect with the user's password instead.
 
 To rotate a token, create the new one, update the client, then drop the old one:
 
@@ -394,8 +396,12 @@ with account SQL. The role's scopes are added to whatever the config file alread
 | An mTLS identity | `PRINCIPAL 'mtls~<subject>'` | `grant role reader to principal 'mtls~reporting-service';` |
 
 When several grants match, the highest role applies. `SHOW EXTERNAL ACCESS` lists the grants, and
-`REVOKE ROLE ... FROM PRINCIPAL` or `FROM GROUP` removes one. An OIDC or mTLS identity granted
-`admin` gets the admin scopes but cannot run account statements; only store users can.
+`REVOKE ROLE ... FROM PRINCIPAL` or `FROM GROUP` removes one.
+
+An identity granted `admin` this way, directly or through a group, can run account statements
+like a store administrator, for as long as the grant exists. Admin scopes that come only from
+the config file's authorization rules do not count. The store still needs one administrator
+of its own with a password or token.
 
 ## Treat the file as credential material
 

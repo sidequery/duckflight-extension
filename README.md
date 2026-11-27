@@ -80,7 +80,7 @@ All listeners serve the same database and can run at the same time.
 
 | Protocol | Name for `duckflight_serve` | Clients | Credentials accepted |
 | --- | --- | --- | --- |
-| PostgreSQL wire | `postgres` | `psql`, Psycopg, JDBC, SQLAlchemy, BI tools | Passwords, OIDC, mTLS |
+| PostgreSQL wire | `postgres` | `psql`, Psycopg, JDBC, SQLAlchemy, BI tools | Passwords, bearer tokens (OAUTHBEARER), OIDC, mTLS |
 | Arrow Flight SQL | `flight` | ADBC drivers, DuckDB's Airport extension | Passwords, bearer tokens, OIDC, mTLS |
 | HTTP (Arrow IPC) | `http` | Anything that can `POST` JSON and read Arrow | Bearer tokens, OIDC, mTLS |
 | Quack | `quack` | Another DuckDB, through its `quack` extension | Bearer tokens, OIDC, mTLS |
@@ -126,7 +126,7 @@ select extension_version from duckdb_extensions() where extension_name = 'duckfl
 
 Users, passwords and bearer tokens live in an account store that DuckFlight keeps beside the
 database. Each user has the role `reader`, `writer` or `admin`, and one account works on every
-listener: its password over PostgreSQL and Flight SQL, its tokens over Flight SQL, HTTP and Quack.
+listener: its password over PostgreSQL and Flight SQL, its tokens over all four.
 Create the first administrator with `duckflight_init`; after that, an administrator manages
 accounts over any listener with SQL such as `CREATE USER`, `CREATE TOKEN` and `ALTER USER`, and
 changes apply at once.
