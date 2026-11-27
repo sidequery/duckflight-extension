@@ -21,10 +21,12 @@ A fenced block opts in through its info string:
 
 Each documentation file is one scenario. Its tagged blocks run top to bottom in a
 fresh directory against a fresh in-memory host, so a file must start the listeners
-its later snippets use. Before the host starts, the runner makes sure the user
-`alice` and a bearer token exist, creating whichever the file did not create itself.
-Snippets read `DUCKFLIGHT_PASSWORD`, `PGPASSWORD` and `DUCKFLIGHT_TOKEN` from the
-environment.
+its later snippets use. Accounts live in the host's account store. Before each block,
+the runner makes sure the administrator `alice` exists, calling `duckflight_init`
+itself unless the block does, and before each client block that `alice` has a bearer
+token. It keeps `alice`'s password and token from the results of `duckflight_init`
+and `duckflight_token_add`, whether a snippet or the runner called them. Snippets read
+`DUCKFLIGHT_PASSWORD`, `PGPASSWORD` and `DUCKFLIGHT_TOKEN` from the environment.
 
 Three things differ from what a reader types:
 
@@ -41,6 +43,7 @@ helper URL must be pinned to the version in Cargo.toml.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pty
 import re
@@ -199,19 +202,31 @@ def check_helper_pin(files: list[Path]) -> list[str]:
 
 
 class Host(CLIHost):
-    def run_script(self, sql: str) -> None:
-        """Run several statements, discarding their results."""
+    def run_script(self, sql: str) -> list[dict]:
+        """Run several statements; return the rows of all their results."""
         marker = "duckflight_docs_block_complete"
         try:
             self._write(f"{sql}\n;\n.print {marker}\n")
         except BrokenPipeError as error:
             raise SnippetError(self._error()) from error
+        output = []
         while True:
             line = self.lines.get(timeout=BLOCK_TIMEOUT_SECONDS)
             if line is None:
                 raise SnippetError(self._error().strip() or "DuckDB exited")
             if line.strip() == marker:
-                return
+                break
+            output.append(line)
+        # JSON mode prints one array per result, one after another.
+        text, index, rows = "".join(output), 0, []
+        decoder = json.JSONDecoder()
+        while index < len(text):
+            if text[index].isspace():
+                index += 1
+                continue
+            result, index = decoder.raw_decode(text, index)
+            rows.extend(result)
+        return rows
 
 
 class Scenario:
@@ -220,6 +235,7 @@ class Scenario:
         self.directory = directory
         self.password = secrets.token_urlsafe(18)
         self.token: str | None = None
+        self.initialized = False
         self.host: Host | None = None
         self.environment = dict(
             os.environ,
@@ -278,7 +294,6 @@ class Scenario:
                         break
                 elif process.poll() is not None:
                     break
-                self._remember_token(output)
                 pending = output[answered:]
                 if re.search(r"[Pp]assword[^\n]*: ?$", pending):
                     os.write(controller, self.password.encode() + b"\n")
@@ -289,34 +304,46 @@ class Scenario:
         finally:
             os.close(controller)
         status = process.wait()
-        self._remember_token(output)
         if status != 0:
             raise SnippetError(f"exit status {status}\n{self.redact(output)}")
         return output
 
-    def _remember_token(self, output: str) -> None:
-        """Keep the most recent token printed by `token add`."""
-        printed = re.findall(r"^token=(\S+)", output, flags=re.MULTILINE)
-        if printed:
-            self.token = printed[-1]
-            self.environment["DUCKFLIGHT_TOKEN"] = self.token
+    def _remember_credentials(self, rows: list[dict]) -> None:
+        """Keep `alice`'s password and token from account-function results."""
+        for row in rows:
+            if row.get("user") != "alice":
+                continue
+            # `duckflight_init` returns a null password when it read a file.
+            if row.get("password"):
+                self.password = row["password"]
+                self.environment["DUCKFLIGHT_PASSWORD"] = self.password
+                self.environment["PGPASSWORD"] = self.password
+            if row.get("token"):
+                self.token = row["token"]
+                self.environment["DUCKFLIGHT_TOKEN"] = self.token
 
-    def ensure_credentials(self) -> None:
-        config = self.directory / "duckflight.toml"
-        users = (
-            tomllib.loads(config.read_text()).get("users", {})
-            if config.exists()
-            else {}
-        )
-        if "alice" not in users:
-            self.shell("duckflight-auth user add alice")
-        if self.token is None:
-            self.shell("duckflight-auth token add docs-runner")
+    def ensure_credentials(self, block: Block) -> None:
+        host = self.ensure_host()
+        if not self.initialized and not (
+            block.role == "host" and "duckflight_init(" in block.code
+        ):
+            password_file = self.directory / "docs-runner.password"
+            password_file.write_text(self.password)
+            host.execute(
+                "select * from duckflight_init('alice', password_file := ?)",
+                [str(password_file)],
+            )
+            self.initialized = True
+        if self.token is None and block.role != "host":
+            self._remember_credentials(
+                host.run_script(
+                    "select * from duckflight_token_add('alice', 'docs-runner')"
+                )
+            )
 
     def ensure_host(self) -> Host:
         if self.host is not None:
             return self.host
-        self.ensure_credentials()
         os.chdir(self.directory)
         extension = self.arguments.extension
         self.host = Host(self.arguments.cli, allow_unsigned=extension is not None)
@@ -339,16 +366,15 @@ class Scenario:
             for line in block.code.split("\n")
             if not re.match(r"^\s*(install|load)\s+duckflight\b", line, re.IGNORECASE)
         ]
-        self.ensure_host().run_script("\n".join(kept))
+        self._remember_credentials(self.ensure_host().run_script("\n".join(kept)))
+        if "duckflight_init(" in block.code:
+            self.initialized = True
 
     def run_pg(self, block: Block) -> None:
         host = self.ensure_host()
         listeners = host.execute("select protocol from duckflight_servers()").fetchall()
         if ("pgwire",) not in listeners:
-            host.execute(
-                "select * from duckflight_pg_serve(?, ?)",
-                [PG_ADDRESS, "duckflight.toml"],
-            )
+            host.execute("select * from duckflight_serve('postgres', ?)", [PG_ADDRESS])
         address, port = PG_ADDRESS.rsplit(":", 1)
         with psycopg.connect(
             host=address,
@@ -392,6 +418,7 @@ class Scenario:
 
     def run(self, block: Block) -> str:
         """Run one block; return "PASS" or a "SKIP ..." reason."""
+        self.ensure_credentials(block)
         if block.language == "sql" and block.role == "host":
             self.run_host(block)
         elif block.language == "sql" and block.role == "pg":

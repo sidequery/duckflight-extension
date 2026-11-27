@@ -1,101 +1,187 @@
 # Authentication and TLS
 
-Every listener takes the path to one `duckflight.toml` file:
+Every DuckFlight listener requires authentication. Users, passwords and bearer tokens live in the
+**account store**, a private database that DuckFlight keeps beside yours and that you manage with
+SQL. A separate `duckflight.toml` file holds the settings that are not accounts: TLS, OIDC
+providers, timeouts, where the store lives, and access controls.
 
-```sql
-select * from duckflight_pg_serve('127.0.0.1:5433', '/run/secrets/duckflight.toml');
-select * from duckflight_flight_serve('127.0.0.1:31337', '/run/secrets/duckflight.toml');
-```
-
-That file is the only source of authentication and TLS settings for listeners started from SQL.
-Environment variables used by standalone DuckFlight services are not merged into it and cannot
-override it. Listeners read the file once when they start, so restart a listener after changing it.
-
-This page explains how to set each method up. For a table of every key, see the
-[configuration reference](CONFIGURATION.md).
+The account store needs DuckFlight 0.2.0 or later. If you are upgrading from 0.1.x, where users
+and tokens were written into `duckflight.toml`, see [Upgrading from 0.1.x](#upgrading-from-01x).
 
 ## Rules that always apply
 
-- **No anonymous servers.** A listener needs at least one user, bearer token, OIDC provider, or
-  mTLS identity. An empty configuration does not start.
+- **No anonymous servers.** A listener needs a user in the account store, an OIDC provider, or an
+  mTLS identity. A listener with none of these does not start.
 - **TLS outside loopback.** Plaintext is allowed only when the address the operating system
   actually bound is loopback (`127.0.0.0/8` or `::1`). Binding `0.0.0.0`, `::`, or any other
-  address requires a `[tls]` section, and startup fails before the listener opens if TLS is missing
-  or invalid.
+  address requires a `[tls]` section in the config file, and startup fails before the listener
+  opens if TLS is missing or invalid.
 - **Host SQL is trusted.** Anyone who can run SQL in the DuckDB process that loaded the extension
-  can start, list and stop listeners. Listener authentication does not replace process isolation:
-  on a host that accepts untrusted SQL, give each tenant its own DuckDB process and control whether
-  the extension can be installed or loaded.
+  can start, list and stop listeners and manage every account. Listener authentication does not
+  replace process isolation: on a host that accepts untrusted SQL, give each tenant its own DuckDB
+  process and control whether the extension can be installed or loaded.
 
 ## Choose a method
 
-| Method | Works with | Sent on the wire | Config section |
+| Method | Works with | Sent on the wire | Set up with |
 | --- | --- | --- | --- |
-| [User and password](#users) | PostgreSQL, Flight SQL | SCRAM-SHA-256 for PostgreSQL; a Basic header during the Flight handshake, then a server-issued bearer | `[users.*]` |
-| [Bearer token](#bearer-tokens) | Flight SQL, HTTP, Quack | The token on every request | `[tokens.*]` |
-| [OIDC](#oidc) | PostgreSQL (SASL OAUTHBEARER), Flight SQL, HTTP, Quack | The provider's access token | `[[oidc]]` and `[[authorization.rules]]` |
+| [Password](#passwords) | PostgreSQL, Flight SQL | SCRAM-SHA-256 for PostgreSQL; a Basic header during the Flight handshake, then a server-issued bearer | `duckflight_init`, `CREATE USER` |
+| [Bearer token](#tokens) | PostgreSQL (SASL OAUTHBEARER), Flight SQL, HTTP, Quack | The token on every request; once at startup for PostgreSQL | `duckflight_token_add`, `CREATE TOKEN` |
+| [OIDC](#oidc) | PostgreSQL (SASL OAUTHBEARER), Flight SQL, HTTP, Quack | The provider's access token | `[[oidc]]` in the config file |
 | [mTLS](#mtls) | Listeners with TLS | A client certificate, mapped by SHA-256 fingerprint | `[tls]` with `client_ca` and `identities` |
 
-Methods can be combined in one file. HTTP and Quack do not accept users and passwords, so a
-config containing only `[users.*]` is not enough for those two listeners.
+One account can have a password, any number of named tokens, or both, so the same account can
+connect over all four listeners: with its password over PostgreSQL and Flight SQL, and with a token
+over any of them. HTTP and Quack never accept passwords.
 
-## Creating credentials
+## Accounts
 
-The [setup functions](SQL_FUNCTIONS.md#setup-functions) create users and tokens from SQL in the
-DuckDB process itself, and return each generated secret once. The helper below does the same from
-a shell, and also rotates and removes entries.
+### Create the first administrator
 
-## The helper
+Run this once, in the DuckDB process that will serve the database:
 
-`duckflight_auth.py` creates and validates the file. It has no dependencies beyond Python 3.11,
-writes atomically with mode `0600`, and never takes a credential as a command-line argument. Run it
-straight from a release tag with [uv](https://docs.astral.sh/uv/):
-
-```sh
-alias duckflight-auth='uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.1.21/scripts/duckflight_auth.py'
+```sql
+load duckflight;
+select * from duckflight_init('alice');
 ```
 
-From a checkout of this repository, `uv run scripts/duckflight_auth.py` is the same program.
+It creates the account store and the user `alice` with the `admin` role, and returns a generated
+password. The password is shown only this once; the store keeps a salted verifier, never the
+password. To choose the password yourself, put it in a file readable only by you and pass
+`password_file`; nothing is returned then:
 
-```sh doctest
-duckflight-auth user add alice
-duckflight-auth user list
-duckflight-auth user test alice
-
-duckflight-auth token add airport
-duckflight-auth token list
-duckflight-auth token test airport
-
-duckflight-auth check
+```sql
+select * from duckflight_init('alice', password_file := 'alice.password');
 ```
 
-Every command writes to `duckflight.toml` in the current directory unless you pass `--file PATH`.
-`--replace` rotates an existing user or token. `check` validates the whole file, and
-`duckflight-auth tls` validates the certificate and key once a `[tls]` section exists.
+Then start listeners. No config file is needed:
 
-The helper understands every section of the file (users, tokens, TLS, OIDC, authorization rules,
-`[flight]`, `[pgwire]`, `[acl]` and `shutdown_grace_secs`) and preserves them when it rewrites the
-file. Comments are not preserved.
-
-## Users
-
-```sh
-duckflight-auth user add alice
+```sql
+select * from duckflight_serve('postgres', '127.0.0.1:5433');
 ```
 
-This stores a salted password verifier, never the password:
+`duckflight_init` works only once per store. To add an administrator later, use
+`duckflight_user_add` or `CREATE USER ... ROLE admin`.
 
-```toml
-[users.alice]
-password_hash = "<64 lowercase hexadecimal characters>"
-salt = [<16 decimal byte values from 0 through 255>]
-iterations = 10000
+### Manage accounts with SQL
+
+An administrator connected through any listener manages accounts with SQL statements. Changes take
+effect immediately; there is nothing to restart. For example, from `psql` connected as `alice`:
+
+```sql
+create user bob role writer;
+create token nightly for user bob;
+show users;
 ```
 
-`password_hash` is `PBKDF2-HMAC-SHA256(password, salt, iterations, output_length=32)`. All users in
-one file must use the same iteration count. DuckFlight requires at least 4,096 and the helper
-generates 10,000 by default. Anyone holding the verifier and salt can guess passwords offline, so
-use strong unique passwords and protect the file.
+`CREATE USER` returns the new user's generated password and `CREATE TOKEN` returns the token. Each
+is shown once, so copy it into the client's secret manager straight away.
+
+| Statement | What it does | Returns |
+| --- | --- | --- |
+| `CREATE USER name [PASSWORD 'password' \| NO PASSWORD] [ROLE role] [TENANT 'tenant']` | Adds a user. Without a password clause a password is generated. `NO PASSWORD` makes a user that signs in with tokens only | `user`, `password` (null unless generated) |
+| `ALTER USER name SET PASSWORD ['password']` | Replaces the password; generates one when none is given | `user`, `password` (null unless generated) |
+| `ALTER USER name DROP PASSWORD` | Removes the password; the user keeps its tokens | |
+| `ALTER USER name SET ROLE role` | Changes the user's role | |
+| `GRANT ROLE role TO USER name` | Same as `ALTER USER name SET ROLE role` | |
+| `ALTER USER name SET TENANT 'tenant'`, `ALTER USER name DROP TENANT` | Sets or clears the tenant used by [row policies](ACCESS_CONTROL.md#mask-a-column-or-filter-by-tenant) | |
+| `DROP USER name` | Removes the user and its tokens | |
+| `CREATE TOKEN token FOR USER name` | Adds a generated bearer token | `user`, `token_name`, `token` |
+| `DROP TOKEN token FOR USER name` | Removes a token | |
+| `GRANT ROLE role TO PRINCIPAL 'id'`, `GRANT ROLE role TO GROUP 'provider', 'group'` | Gives an [OIDC or mTLS identity](#oidc-and-mtls-identities) a role | |
+| `REVOKE ROLE role FROM PRINCIPAL 'id'`, `REVOKE ROLE role FROM GROUP 'provider', 'group'` | Takes it back | |
+| `SHOW USERS` | Lists users | `user`, `role`, `has_password`, `tokens`, `tenant` |
+| `SHOW TOKENS [FOR USER name]` | Lists token names; tokens themselves are never stored | `user`, `token_name` |
+| `SHOW EXTERNAL ACCESS` | Lists roles granted to OIDC and mTLS identities | `kind`, `provider`, `name`, `role` |
+
+`role` is `reader`, `writer` or `admin`. Names are identifiers: double-quote a name that contains
+punctuation or spaces, such as `"ci.loader"`. Passwords and tenants are single-quoted strings.
+`REVOKE ROLE ... FROM USER` does not exist; change a user's role with `ALTER USER ... SET ROLE` or
+remove the user with `DROP USER`.
+
+A few rules apply to every account statement:
+
+- **Administrators only.** Only a store user with the `admin` role, or an
+  [OIDC or mTLS identity granted it](#oidc-and-mtls-identities), can run them. Any other caller
+  gets `permission denied: account statements require a store administrator`. The one exception:
+  a user signed in with a password can change their own password with
+  `ALTER USER <own name> SET PASSWORD`.
+- **One statement at a time, outside a transaction.** Send each statement on its own, with the
+  password written as a literal rather than a bind parameter. Psycopg and SQLAlchemy open a
+  transaction before the first statement unless you enable autocommit, so enable it for these
+  statements. Over HTTP, send them to `POST /streaming-query`.
+- **The store keeps an administrator.** A change that would leave no administrator with a password
+  or token is refused with `the store must keep at least one administrator with a credential`.
+  Create the replacement administrator first.
+- **Before `duckflight_init`, these are not account statements.** Until the store has a user, a
+  listener passes `CREATE USER`, `SHOW USERS` and the rest to DuckDB, which treats them as its own
+  SQL.
+
+### What happens to open sessions
+
+Listeners look accounts up at every login, so a new user or token works at once. Sessions that are
+already open check their account at every statement:
+
+- A changed role or tenant applies from the session's next statement.
+- A dropped user, a dropped token, or a replaced password ends the sessions that used it at their
+  next statement.
+- A user who changes their own password keeps the session they changed it in; their other sessions
+  that signed in with the old password end.
+- A Quack session whose account changes must reconnect; it reports
+  `Quack authorization changed; reconnect before continuing`.
+
+### Manage accounts from the host
+
+The same work can be done in the DuckDB process that serves the database, which is useful for
+scripts and for recovering access. These functions are reserved for that process: a client
+connected through a listener gets an error from them whatever its role.
+
+```sql
+select * from duckflight_user_add('carol');
+select * from duckflight_user_add('etl', role := 'writer');
+select * from duckflight_token_add('etl', 'nightly');
+select * from duckflight_accounts();
+```
+
+Arguments and result columns are in the [SQL reference](SQL_FUNCTIONS.md#account-store). If every
+administrator's password is lost, create a new administrator from the host with
+`duckflight_user_add('<name>', role := 'admin')`, sign in as that user, and reset the others.
+
+## Roles
+
+Every store user has one of three built-in roles:
+
+| Role | Allows |
+| --- | --- |
+| `reader` | Read-only SQL such as `SELECT`, query metadata, and transactions |
+| `writer` | Everything `reader` allows, plus SQL that changes data or schema (`INSERT`, `UPDATE`, `CREATE TABLE`) and bulk ingestion |
+| `admin` | Everything `writer` allows, plus extension-management SQL where the listener permits it, and the [account statements](#manage-accounts-with-sql). With [SQL access controls](ACCESS_CONTROL.md) enabled, admins can also issue grants |
+
+New users start as `reader` unless a role is given. A token carries its user's role, so to let a
+token write, give its user the `writer` role. The built-in roles work on DuckDB 2.0.0 and 2.0.1.
+Restricting a role to particular tables, columns or rows is a separate feature, which needs DuckDB
+2.0.1; see [SQL access controls](ACCESS_CONTROL.md).
+
+### Authorization scopes
+
+Internally each role is a set of scopes. Scopes are also what [OIDC rules](#oidc) and
+[mTLS identities](#mtls) grant, so they appear in the config file. Values are case-sensitive.
+
+| Scope | Permission | In role |
+| --- | --- | --- |
+| `query:execute` | Run read-only SQL such as `SELECT` and access query metadata. | `reader`, `writer`, `admin` |
+| `transaction:manage` | Begin, commit, and roll back transactions through the HTTP and Flight SQL transaction APIs. | `reader`, `writer`, `admin` |
+| `query:mutate` | Run SQL that changes data or schema, such as `INSERT`, `UPDATE`, and `CREATE TABLE`. | `writer`, `admin` |
+| `query:ingest` | Use the HTTP Arrow IPC and Flight SQL bulk ingestion APIs. | `writer`, `admin` |
+| `query:admin` | Run extension-management SQL such as `INSTALL` and `LOAD` where the listener permits it. HTTP and PgWire reject these commands regardless of scope. | `admin` |
+
+Airport and ADBC open a Flight SQL transaction even for reads, which every role allows.
+
+## Passwords
+
+DuckFlight generates passwords with 192 bits of randomness, or takes the one you supply. The store
+keeps only a salted SCRAM-SHA-256 verifier. Anyone holding the verifier can guess passwords
+offline, so use strong unique passwords and protect the store.
 
 PostgreSQL clients authenticate with SCRAM-SHA-256. Flight SQL clients use the standard ADBC flow
 instead: a Basic `authorization` header during the handshake, after which the server issues a
@@ -104,64 +190,127 @@ plaintext transport. Server-issued bearers last at most 24 hours and are invalid
 listener stops or the client closes its session; ADBC clients then reconnect and repeat the
 handshake.
 
-## Bearer tokens
+## Tokens
 
-```sh
-duckflight-auth token add airport
+A token belongs to one user and acts with that user's role. DuckFlight generates each token with
+256 bits of randomness and returns it once; the store keeps only its SHA-256 digest. Token names
+are unique per user and appear in `SHOW TOKENS`, so name them after the client that holds them.
+
+Tokens are accepted by every listener. Flight SQL, HTTP and Quack take them as
+`authorization: Bearer <token>`. The PostgreSQL listener takes them through SASL `OAUTHBEARER`,
+with the token's user as the startup user. Few PostgreSQL clients can send a fixed bearer token
+that way, so most connect with the user's password instead.
+
+An HTTP listener serves one user: the first user that authenticates on it. Another user's token
+on the same listener is refused with status `409` until the listener is stopped and started
+again. Give each HTTP user a listener of its own. The other listeners serve any number of users.
+
+To rotate a token, create the new one, update the client, then drop the old one:
+
+```sql
+create token nightly_v2 for user bob;
+drop token nightly for user bob;
 ```
 
-The command prints the raw token once as `token=...`. Copy it straight into the client's secret
-manager; only its SHA-256 digest is written to the file:
+## The account store
+
+### Where it lives
+
+By default the store is a DuckDB file beside the database that loaded the extension:
+
+| Database | Store |
+| --- | --- |
+| A file, such as `/data/sales.duckdb` | `/data/sales.duckdb.duckflight/store.duckdb` |
+| In memory | `.duckflight/store.duckdb` in the DuckDB process's working directory |
+
+It is never inside the served database, and no client SQL can reach it. `duckflight_init` creates
+it; the directory is created with mode `0700` and the file with mode `0600`.
+
+To keep it somewhere else, name it in the config file:
 
 ```toml
-[tokens.airport]
-sha256 = "<64 lowercase hexadecimal characters>"
-subject = "airport"
-scopes = [
-  "query:execute",
-  "transaction:manage",
-]
+[store]
+path = "/var/lib/duckflight/accounts/store.duckdb"
 ```
 
-Helper-generated tokens carry 256 bits of randomness, which is why a plain digest is appropriate.
-Do not put a human-chosen password in a token entry. `subject` is the name recorded for auditing
-and defaults to the token name.
+A relative path is resolved against the config file's directory. The directory holding the store
+must be private (mode `0700`); DuckFlight creates it that way if it does not exist. A store named in
+the config file is created when a listener starts with that file.
 
-### Authorization scopes
+All listeners of one DuckDB process use the same store. When the config file names the store,
+start every listener with that file and pass it to the host functions as `config_file`, so they
+use the same store:
 
-Scopes limit what a token, mTLS identity or OIDC rule may do. Values are case-sensitive.
+```sql
+select * from duckflight_init('alice', config_file := 'duckflight.toml');
+select * from duckflight_serve('postgres', '127.0.0.1:5433', config_file := 'duckflight.toml');
+```
 
-| Scope | Permission |
+`duckflight_config_check('duckflight.toml')` reports which store a file resolves to in its
+`store_path` column.
+
+Only one DuckDB process can have a store file open. When several servers need the same accounts,
+keep the store in a DuckLake catalog instead.
+
+### Share accounts with a DuckLake store
+
+With a [DuckLake](https://ducklake.select/) store, several DuckFlight servers read and write the
+same accounts. Give every server the same `[store]` settings:
+
+```toml
+[store]
+catalog = "ducklake:sqlite:/srv/duckflight/store.sqlite"
+data_path = "/srv/duckflight/store-data/"
+refresh_ms = 1000
+```
+
+With a SQLite catalog like this one, every server must be able to open the SQLite file and the
+data path, for example on the same machine or on a shared file system.
+
+| Key | Meaning |
 | --- | --- |
-| `query:execute` | Run read-only SQL such as `SELECT` and access query metadata. |
-| `query:mutate` | Run SQL that changes data or schema, such as `INSERT`, `UPDATE`, and `CREATE TABLE`. |
-| `query:ingest` | Use the HTTP Arrow IPC and Flight SQL bulk ingestion APIs. |
-| `transaction:manage` | Begin, commit, and roll back transactions through the HTTP and Flight SQL transaction APIs. |
-| `query:admin` | Run extension-management SQL such as `INSTALL` and `LOAD` where the listener permits it. HTTP and PgWire reject these commands regardless of scope. |
+| `catalog` | The DuckLake `ATTACH` target, starting with `ducklake:` |
+| `data_path` | Where DuckLake writes its data files. A relative local path is resolved against the config file's directory |
+| `setup` | Array of SQL statements run before the catalog is attached, such as `create secret` for object storage |
+| `refresh_ms` | For how many milliseconds a server may reuse its last read of the catalog when it checks an account. Default `1000`, maximum `60000`. With `0`, every check queries the catalog |
 
-List every permission the client needs. A client that reads and writes over Flight SQL needs both
-`query:execute` and `query:mutate`.
+DuckLake stores have been tested with a SQLite catalog. PostgreSQL catalogs have not been tested
+yet.
 
-When `scopes` is omitted from a token or mTLS identity it defaults to
-`["query:execute", "transaction:manage"]`, which is also what `token add` writes. Airport and ADBC
-open a Flight SQL transaction even for reads, so both are needed for the least-privilege read path.
-This still denies mutation, ingestion and administrative SQL.
+Each server opens the store in a separate, private DuckDB instance, and loads the `ducklake`
+extension there together with the extension for the catalog's metadata database (`sqlite` in this
+example). Both extensions must already be installed on the host or be installable from it.
 
-```sh doctest
-duckflight-auth token add loader --scope query:execute --scope query:mutate --scope transaction:manage
-duckflight-auth token add admin --full-access
-```
+Before relying on a shared store:
 
-OIDC identities start with no scopes and receive only those granted by matching rules.
+- **Changes from other servers take up to `refresh_ms` to arrive.** A server sees its own changes
+  immediately. When another server drops a user or a token, this server notices within the
+  refresh interval; until then, an open session of that user can still run statements here.
+- **Logins stop when the catalog is unreachable.** Once a server's last good read is older than
+  the refresh interval, it refuses logins and session checks until it can read the catalog again.
+  It never falls back to stale accounts.
+- **Use a catalog the served database does not attach.** If the database you serve has the store's
+  catalog attached, the listener refuses to start; the store must stay out of reach of client SQL.
+- **Protect the catalog like a password file.** Whoever can read the catalog or its data path can
+  read the password verifiers and token digests, so allow only DuckFlight to access them. DuckLake
+  also retains old snapshots: the verifier of a dropped user remains readable in them until you
+  expire those snapshots.
+- **Pass the file to the host functions.** Run `duckflight_init('alice', config_file := '...')`
+  once, from any server with these settings.
 
 ## TLS
 
-Add one certificate and key. All listeners share it, each negotiating TLS on its own port.
+Add one certificate and key to the config file. All listeners share it, each negotiating TLS on its
+own port.
 
 ```toml
 [tls]
 cert = "server.crt"
 key = "server.key"
+```
+
+```sql
+select * from duckflight_serve('postgres', '0.0.0.0:5433', config_file := 'duckflight.toml');
 ```
 
 Relative paths are resolved against the directory containing `duckflight.toml`, not the process
@@ -175,7 +324,6 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
   -keyout server.key -out server.crt \
   -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 chmod 600 server.key
-duckflight-auth tls
 ```
 
 Clients then trust `server.crt` as their CA. In production use a certificate from your own CA or a
@@ -186,7 +334,8 @@ identity on its own.
 
 ## OIDC
 
-Add one `[[oidc]]` entry per identity provider, then grant scopes with authorization rules.
+Add one `[[oidc]]` entry per identity provider to the config file, then give its identities access
+with authorization rules, with [built-in roles](#oidc-and-mtls-identities), or both.
 
 ```toml
 [[oidc]]
@@ -209,17 +358,14 @@ RS256 and ES256 are supported. Locate keys with an explicit `jwks_url`, an expli
 required, and `allow_http = true` exists only for local test providers.
 
 Every rule must name a configured `oidc:<name>`. The optional `subject`, `group` and `tenant`
-selectors must all match for a rule to apply. Matching rules add their scopes together, and an
-identity matching no rule gets no query privileges. The provider's own `scope` and `roles` claims
-never grant DuckFlight privileges directly.
+selectors must all match for a rule to apply. Matching rules add their
+[scopes](#authorization-scopes) together, and an identity that matches no rule and holds no role
+gets no query privileges. The provider's own `scope` and `roles` claims never grant DuckFlight
+privileges directly.
 
 Flight, HTTP and Quack clients send the provider's access token as `authorization: Bearer <token>`.
 PostgreSQL clients that support SASL OAUTHBEARER can use the same providers. OIDC does not remove
 the TLS requirement outside loopback.
-
-The helper checks the structure of these tables and that a usable signing key can be selected.
-Cryptographic validation and provider availability are checked at runtime; the helper does not
-fetch tokens.
 
 ## mTLS
 
@@ -242,22 +388,111 @@ default. Set `client_cert_mode = "optional"` only for a deliberately mixed deplo
 clients authenticate with passwords or bearer tokens. A request presenting both a client
 certificate and a bearer token is rejected as ambiguous.
 
+## OIDC and mTLS identities
+
+OIDC and mTLS identities are not store users, but an administrator can give them a built-in role
+with account SQL. The role's scopes are added to whatever the config file already grants them.
+
+| Identity | Grant to | Example |
+| --- | --- | --- |
+| One OIDC user | `PRINCIPAL 'oidc~<issuer>~<subject>'` | `grant role reader to principal 'oidc~https://identity.example.com~alice';` |
+| An OIDC group, from the provider's `groups_claim` | `GROUP 'oidc:<name>', '<group>'` | `grant role writer to group 'oidc:company', 'analytics';` |
+| An mTLS identity | `PRINCIPAL 'mtls~<subject>'` | `grant role reader to principal 'mtls~reporting-service';` |
+
+When several grants match, the highest role applies. `SHOW EXTERNAL ACCESS` lists the grants, and
+`REVOKE ROLE ... FROM PRINCIPAL` or `FROM GROUP` removes one.
+
+An identity granted `admin` this way, directly or through a group, can run account statements
+like a store administrator, for as long as the grant exists. Admin scopes that come only from
+the config file's authorization rules do not count. The store still needs one administrator
+of its own with a password or token.
+
 ## Treat the file as credential material
 
-- Never commit it, attach it to a release, include it in CI artifacts, or bake it into an image.
-- Store production copies in a secret manager and provision them only at deployment time. Keep
-  development, staging and production files separate.
-- Limit ownership to the account running DuckDB, with mode `0600`. Protect parent directories,
-  backups, certificate private keys and the client secret store too.
-- Mount the deployed copy read-only where possible. Run the helper against a writable
-  administrative copy, validate it, then publish a new secret-manager version.
-- Do not print the file, password hashes, salts, token hashes, raw tokens or passwords in logs,
-  tickets, terminal recordings or support bundles.
+The account store and the config file both hold material an attacker can use.
+
+- Never commit either, attach them to a release, include them in CI artifacts, or bake them into
+  an image.
+- Limit ownership to the account running DuckDB: mode `0600` for files and `0700` for the store's
+  directory. Protect backups, certificate private keys and the client secret store too.
+- Store production copies of the config file in a secret manager and provision them only at
+  deployment time. Keep development, staging and production separate.
+- Do not print passwords, tokens, password verifiers, token digests or the store's contents in
+  logs, tickets, terminal recordings or support bundles.
 
 ### If something leaks
 
 | What was exposed | What to do |
 | --- | --- |
-| The whole file | Rotate every user with a new password and salt, and rotate every bearer token. |
-| One raw bearer token | Replace that token entry with `token add NAME --replace` and update its client. |
-| Either | Stop and restart the listener to invalidate Flight sessions already issued. |
+| A user's password | `ALTER USER name SET PASSWORD`. Sessions that signed in with the old password end at their next statement. |
+| A token | `DROP TOKEN token FOR USER name`, then create a new one for the client. Sessions that used it end. |
+| The store file or DuckLake catalog | Reset every password and replace every token. |
+| A certificate private key | Replace the certificate and restart the listeners. |
+
+## Upgrading from 0.1.x
+
+DuckFlight 0.1.x kept users and tokens in the `[users]` and `[tokens]` tables of `duckflight.toml`.
+Those tables keep working after the upgrade until the account store is initialized.
+
+One call changes when you install 0.2.0. A single function now starts every listener, so
+replace the per-protocol functions:
+
+| 0.1.x | 0.2.0 |
+| --- | --- |
+| `duckflight_pg_serve(address, file)` | `duckflight_serve('postgres', address, config_file := file)` |
+| `duckflight_flight_serve(address, file)` | `duckflight_serve('flight', address, config_file := file)` |
+| `duckflight_http_serve(address, file)` | `duckflight_serve('http', address, config_file := file)` |
+| `duckflight_quack_serve(address, file)` | `duckflight_serve('quack', address, config_file := file)` |
+
+To move them into the store, run in the host process:
+
+```sql
+select * from duckflight_import('duckflight.toml');
+```
+
+- Every `[users]` entry becomes a store user with the same password and the `admin` role, because
+  0.1.x password users had full access.
+- Every `[tokens]` entry joins the store user named by its `subject`, which is created without a
+  password if it does not exist. The user's role follows the token's scopes: `admin` for
+  `query:admin`, `writer` for `query:mutate` or `query:ingest`, otherwise `reader`. A
+  `tenant_id` carries over.
+- The import is all or nothing and leaves the file unchanged. Running it again changes nothing:
+  entries already in the store with the same credential are skipped. The `note` column says what
+  happened to each entry.
+- Into an empty store, the import itself initializes the store, which needs an administrator in the
+  file: a `[users]` entry or a token with `query:admin`. Otherwise run `duckflight_init` first.
+
+Once the store has a user, it is the only source of passwords and tokens:
+
+- `[users]` and `[tokens]` in the config file are ignored, also by listeners that are already
+  running. A listener started with such a file logs a warning naming the entries it ignores.
+  `duckflight_config_check` counts them in its `ignored_users` and `ignored_tokens` columns.
+  Import them, then delete them from the file.
+- `duckflight_user_create` and `duckflight_token_create`, the 0.1.x functions that append to the
+  file, refuse, because the store would ignore what they add. Use `duckflight_user_add` and
+  `duckflight_token_add`, or account SQL.
+
+### The helper
+
+`scripts/duckflight_auth.py` creates and validates `[users]` and `[tokens]` entries in a config
+file. It is for DuckFlight builds that predate the account store, such as the
+[Docker image](DOCKER.md) and the DuckDB 1.5.6 build; with the account store, use the SQL above
+instead. It does not manage `[store]` tables. Run it from a release tag with
+[uv](https://docs.astral.sh/uv/):
+
+```sh
+alias duckflight-auth='uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.2.0/scripts/duckflight_auth.py'
+```
+
+```sh
+duckflight-auth user add alice
+duckflight-auth token add airport
+duckflight-auth check
+```
+
+Every command writes to `duckflight.toml` in the current directory unless you pass `--file PATH`,
+prompts for passwords rather than taking them as arguments, and writes the file with mode `0600`.
+`token add` prints the raw token once as `token=...`; its token gets `query:execute` and
+`transaction:manage` unless you list [scopes](#authorization-scopes) with `--scope`. `--replace`
+rotates an existing entry. The
+format of both tables is in the [configuration reference](CONFIGURATION.md#legacy-users-and-tokens).

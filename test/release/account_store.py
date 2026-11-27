@@ -46,7 +46,10 @@ def connect(address: str, user: str, password: str) -> psycopg.Connection:
 
 def http(address: str, token: str, sql: str) -> tuple[int, bytes]:
     return request(
-        f"http://{address}/streaming-query", {"query": sql, "useCache": False}, token, None
+        f"http://{address}/streaming-query",
+        {"query": sql, "useCache": False},
+        token,
+        None,
     )
 
 
@@ -66,7 +69,9 @@ def write_legacy_config(path: Path, token: str) -> None:
     path.chmod(0o600)
 
 
-def assert_host_error(cli: Path, extension: Path, fixtures: Path, sql: str, expected: str) -> None:
+def assert_host_error(
+    cli: Path, extension: Path, fixtures: Path, sql: str, expected: str
+) -> None:
     """The test host stops at the first error, so each failing statement gets its own."""
     try:
         with test_host(cli, fixtures, extension, None) as host:
@@ -100,7 +105,8 @@ def run(cli: Path, extension: Path) -> None:
                 # No config file: the listeners authenticate against the store.
                 addresses = {
                     protocol: host.execute(
-                        "select address from duckflight_serve(?, '127.0.0.1:0')", [protocol]
+                        "select address from duckflight_serve(?, '127.0.0.1:0')",
+                        [protocol],
                     ).fetchone()[0]
                     for protocol in ("pgwire", "http")
                 }
@@ -132,7 +138,9 @@ def run(cli: Path, extension: Path) -> None:
 
                 with connect(addresses["pgwire"], "bob", bob_password) as session:
                     assert session.execute("select id from trips").fetchall() == [(1,)]
-                status, body = http(addresses["http"], token, "insert into trips values (2)")
+                status, body = http(
+                    addresses["http"], token, "insert into trips values (2)"
+                )
                 assert status == 200, (status, body)
                 status, _ = http(addresses["http"], token + "x", "select id from trips")
                 assert status == 401, status
@@ -145,21 +153,38 @@ def run(cli: Path, extension: Path) -> None:
                 ).fetchone()
                 assert Path(row[0]).resolve() == store.resolve(), row
                 assert row[1:] == (True, True, 2, 1, 1), row
-                status, _ = http(addresses["http"], legacy_token, "select id from trips")
+                # An HTTP listener serves the first user that authenticates on it, so the
+                # file's token gets a listener of its own.
+                addresses["legacy http"] = host.execute(
+                    "select address from duckflight_serve('http', '127.0.0.1:0')"
+                ).fetchone()[0]
+                status, _ = http(
+                    addresses["legacy http"], legacy_token, "select id from trips"
+                )
                 assert status == 401, status
 
                 imported = host.execute(
                     "select kind, name, account, role from duckflight_import(?) order by kind",
                     [str(legacy)],
                 ).fetchall()
+                # A token's subject becomes a user without a password that owns the token.
                 assert imported == [
                     ("token", "loader", "ci", "writer"),
+                    ("user", "ci", "ci", "writer"),
                     ("user", "legacy", "legacy", "admin"),
                 ], imported
                 with connect(addresses["pgwire"], "legacy", LEGACY_PASSWORD) as session:
-                    assert session.execute("select count(*) from trips").fetchall() == [(2,)]
-                status, body = http(addresses["http"], legacy_token, "select id from trips")
+                    assert session.execute("select count(*) from trips").fetchall() == [
+                        (2,)
+                    ]
+                status, body = http(
+                    addresses["legacy http"], legacy_token, "select id from trips"
+                )
                 assert status == 200, (status, body)
+                status, body = http(
+                    addresses["http"], legacy_token, "select id from trips"
+                )
+                assert status == 409, (status, body)
 
                 accounts = host.execute(
                     "select user, role, has_password, tokens::int, tenant "
@@ -177,8 +202,11 @@ def run(cli: Path, extension: Path) -> None:
                 for secret in (admin_password, bob_password, token, legacy_token):
                     assert secret.encode() not in stored
 
-                for protocol, address in addresses.items():
-                    host.execute("select * from duckflight_stop(?, ?)", [protocol, address])
+                for label, address in addresses.items():
+                    host.execute(
+                        "select * from duckflight_stop(?, ?)",
+                        [label.split()[-1], address],
+                    )
 
             # Requests the initialized store cannot honour say why and change nothing.
             content = legacy.read_text()
@@ -200,7 +228,9 @@ def run(cli: Path, extension: Path) -> None:
                 assert_host_error(cli, extension, fixtures, sql, expected)
             assert legacy.read_text() == content
 
-    print("PASS account store: host setup, serving without a config file, import and refusals")
+    print(
+        "PASS account store: host setup, serving without a config file, import and refusals"
+    )
 
 
 if __name__ == "__main__":

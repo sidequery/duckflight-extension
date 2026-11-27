@@ -6,8 +6,9 @@ and operator statistics. Exporters and profiling are disabled by default.
 
 ## Configuration
 
-Set environment variables before loading the extension. Authentication and listener
-TLS still use the existing `duckflight.toml` configuration.
+Set environment variables before loading the extension. Telemetry does not change
+authentication: accounts still come from the account store, and listener TLS from
+`duckflight.toml`.
 
 ```sh
 export DUCKFLIGHT_TELEMETRY_ENABLED=true
@@ -20,8 +21,8 @@ export DUCKFLIGHT_PROFILE_SAMPLE_RATIO=0.05
 
 ```sql
 load duckflight;
-select * from duckflight_pg_serve('127.0.0.1:5433', '/path/to/duckflight.toml');
-select * from duckflight_flight_serve('127.0.0.1:31337', '/path/to/duckflight.toml');
+select * from duckflight_serve('postgres', '127.0.0.1:5433');
+select * from duckflight_serve('flight', '127.0.0.1:31337');
 ```
 
 | Environment variable | Default | Meaning |

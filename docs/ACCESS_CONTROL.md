@@ -6,66 +6,72 @@ owner retains direct access to the database.
 
 ## Give a reader access to one column
 
-This example uses DuckFlight 0.1.21 or later on stock DuckDB **2.0.1**, two
-password-authenticated users, and an in-memory table. Access controls are not available on
-DuckDB 2.0.0. See the [compatibility table](INSTALL.md#which-build-you-get) for where to
-install from.
+SQL access controls need DuckFlight 0.1.21 or later on stock DuckDB **2.0.1**; they are not
+available on DuckDB 2.0.0. This example also creates its logins in the
+[account store](AUTHENTICATION.md#the-account-store), which needs DuckFlight 0.2.0 or later. See
+the [compatibility table](INSTALL.md#which-build-you-get) for where to install from. It uses two
+users and an in-memory table.
 
-**1. Configure the two logins and the role store.** From the extension checkout, create
-the credentials with the authentication helper. It prompts for each password.
+**1. Configure the role store.** Create a private directory with a config file in it:
 
 ```sh
 mkdir -m 700 acl-demo
-uv run scripts/duckflight_auth.py user add admin --file acl-demo/duckflight.toml
-uv run scripts/duckflight_auth.py user add reader --file acl-demo/duckflight.toml
 ```
 
-Append this section to `acl-demo/duckflight.toml` after generating the credentials.
-The helper keeps it when you change credentials later.
+Save this as `acl-demo/duckflight.toml`:
 
 ```toml
 [acl]
 store = "roles.duckdb"
-admins = ["local~admin"]
+admins = ["local~ops"]
 ```
 
-DuckFlight creates the role store relative to the config file. Keep its directory private
-and writable by the host account. `local~admin` names the authenticated local user who
-can issue grants. All listeners on the same host runtime must use the same ACL settings.
+DuckFlight creates the role store relative to the config file. Keep its directory private and
+writable by the host account. Roles and accounts share one store, so `roles.duckdb` also holds the
+two logins below. `local~ops` names the store user `ops`, who can issue grants. All listeners on
+the same host runtime must use the same ACL settings.
 
 **2. Start the host.** In DuckDB 2.0.1, install DuckFlight from the
 [Sidequery repository](INSTALL.md#sidequery-repository) and load it. Run from the directory
-containing `acl-demo` and leave this DuckDB session open.
+containing `acl-demo` and leave this DuckDB session open. Pass the config file to the setup
+functions so the accounts land in the role store:
 
 ```sql
 load duckflight from sidequery;
 create table orders as select 42 as id, 'account-1234' as account_number;
-select * from duckflight_pg_serve('127.0.0.1:5433', 'acl-demo/duckflight.toml');
+
+select * from duckflight_init('ops', config_file := 'acl-demo/duckflight.toml');
+select * from duckflight_user_add('bob', config_file := 'acl-demo/duckflight.toml');
+
+select * from duckflight_serve('postgres', '127.0.0.1:5433', config_file := 'acl-demo/duckflight.toml');
 ```
 
+`ops` is an administrator and `bob` a `reader`. Each function returns the user's generated password
+once.
+
 **3. Grant access through the listener.** Open a second terminal and connect with
-`psql -h 127.0.0.1 -p 5433 -U admin -d memory -W`. Run these statements as `admin`.
+`psql -h 127.0.0.1 -p 5433 -U ops -d memory -W`. Run these statements as `ops`.
 
 ```sql
 create role analyst;
 grant usage on catalog memory to role analyst;
 grant usage on schema memory.main to role analyst;
 grant select (id) on table memory.main.orders to role analyst;
-grant role analyst to principal 'local~reader';
+grant role analyst to principal 'local~bob';
 show grants for role analyst details;
 ```
 
 **4. Verify and revoke.** In a third terminal, connect with
-`psql -h 127.0.0.1 -p 5433 -U reader -d memory -W`. The reader's single assigned
-role activates automatically.
+`psql -h 127.0.0.1 -p 5433 -U bob -d memory -W`. Bob's single assigned role activates
+automatically.
 
 ```sql
 select id from memory.main.orders;             -- returns 42
 select account_number from memory.main.orders; -- permission denied
 ```
 
-Back in the `admin` session, run the following command. Repeat the first query in
-the open `reader` session. It now returns permission denied.
+Back in the `ops` session, run the following command. Repeat the first query in the open `bob`
+session. It now returns permission denied.
 
 ```sql
 revoke select (id) on table memory.main.orders from role analyst;
@@ -79,7 +85,7 @@ table's grants apply to its current instance.
 ## Mask a column or filter by tenant
 
 Continuing the example, the administrator can expose just the last four characters of
-the account number. After this grant, the reader's second query returns `****1234`.
+the account number. After this grant, Bob's second query returns `****1234`.
 
 ```sql
 grant select masked last four (account_number) on table memory.main.orders to role analyst;
@@ -99,8 +105,10 @@ grant on the same column through an active or inherited role exposes the raw val
 For a table with a physical `VARCHAR` tenant column, an administrator can run
 `alter table warehouse.sales.orders set row policy using tenant (tenant_id)`.
 The policy compares each row to the authenticated tenant ID, for example from a
-verified OIDC claim. The reader still needs the relevant grants. A credential without
-a tenant ID cannot read that table. Tenant restrictions also apply to permitted writes.
+verified OIDC claim, or the tenant of a store user, set with
+`alter user bob set tenant 'acme'`. The client still needs the relevant grants. A
+credential without a tenant ID cannot read that table. Tenant restrictions also apply
+to permitted writes.
 
 ## Roles, credentials and protocols
 
@@ -108,9 +116,15 @@ a tenant ID cannot read that table. Tenant restrictions also apply to permitted 
   For example, `grant role analyst to group 'oidc:company', 'analytics'` uses the
   configured provider named `company`. Session clients can choose an assigned role
   with `set role analyst`.
-- **Credential scopes.** A table grant and the credential's execution scopes both
-  apply. A read-only credential cannot use an UPDATE grant. A bearer credential used
-  for role administration also needs `query:admin`.
+- **Built-in roles.** Every store user also has a built-in role, `reader`, `writer`
+  or `admin`, managed with [account SQL](AUTHENTICATION.md#manage-accounts-with-sql).
+  A table grant and the built-in role both apply: a `reader` cannot use an UPDATE
+  grant. The names `reader`, `writer` and `admin` are reserved, so `create role`
+  cannot use them.
+- **Administrators.** The principals in `acl.admins` and every store user with the
+  `admin` role can issue grants. A principal in `acl.admins` also needs the
+  `query:admin` scope, which for a store user means the `admin` role, and for an OIDC
+  identity a rule or built-in role that grants it.
 - **Writes.** Grant INSERT, UPDATE and DELETE independently. INSERT and UPDATE can
   be limited to specific columns. Columns read by a write's predicates or expressions
   also need SELECT. Writes run in autocommit on PgWire and Flight SQL.

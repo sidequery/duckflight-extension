@@ -14,6 +14,11 @@ Both listeners bind `0.0.0.0` inside the container, so **authentication and TLS 
 even when Docker publishes the ports only on host loopback. No default credentials or self-signed
 certificates are created.
 
+The image's DuckFlight core predates the [account store](AUTHENTICATION.md#the-account-store),
+so `duckflight_init`, account SQL and the other account store functions are not available in it.
+Users and tokens come from the `[users]` and `[tokens]` tables of the mounted config file, as in
+DuckFlight 0.1.x, and listeners read them when the container starts.
+
 **1. Prepare a secrets directory** holding `duckflight.toml`, the TLS certificate and its key.
 Create them with the [helper](AUTHENTICATION.md#the-helper) and a
 [certificate](AUTHENTICATION.md#tls) whose names match what clients will connect to; for local
@@ -87,9 +92,9 @@ docker compose -f docker/compose.yaml up --build -d
 | `DUCKFLIGHT_INIT_SQL` | Unset | Path inside the container to a mounted SQL file, e.g. `/run/secrets/init.sql`; executed before listeners start **on every startup**, so make it idempotent |
 
 At least one protocol must stay enabled. Changing a bind port also means changing Docker's port
-mapping. Credentials, token scopes and TLS come only from the TOML file; passwords are never
-accepted through environment variables. Use one container per database file, and never share a
-writable DuckDB file between processes.
+mapping. Credentials, token scopes and TLS come only from the TOML file, so restart the container
+after changing it; passwords are never accepted through environment variables. Use one container
+per database file, and never share a writable DuckDB file between processes.
 
 ## What clients are allowed to do
 
