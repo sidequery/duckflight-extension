@@ -100,6 +100,12 @@ The `Authorization: Bearer` header is missing, or the token does not exist: it w
 its user was dropped, or it is a `[tokens]` entry of the config file that the initialized account
 store ignores. HTTP never accepts a user name and password.
 
+### HTTP `409`: `HTTP is configured single-tenant per listener`
+
+An HTTP listener serves the first user that authenticates on it and refuses every other user.
+Start another listener with `duckflight_serve('http', ...)` for the second user, or stop and
+restart the listener to hand it to a different one.
+
 ### `Capability does not grant required scope: query:mutate`
 
 The credential can read but not write. HTTP returns this with status `403`. A token has its user's

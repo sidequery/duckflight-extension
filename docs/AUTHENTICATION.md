@@ -201,6 +201,10 @@ Tokens are accepted by every listener. Flight SQL, HTTP and Quack take them as
 with the token's user as the startup user. Few PostgreSQL clients can send a fixed bearer token
 that way, so most connect with the user's password instead.
 
+An HTTP listener serves one user: the first user that authenticates on it. Another user's token
+on the same listener is refused with status `409` until the listener is stopped and started
+again. Give each HTTP user a listener of its own. The other listeners serve any number of users.
+
 To rotate a token, create the new one, update the client, then drop the old one:
 
 ```sql
