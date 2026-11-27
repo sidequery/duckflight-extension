@@ -226,7 +226,7 @@ def check_execution_deadline(host: duckdb.DuckDBPyConnection, config: Path) -> N
     )
     deadline_config.chmod(0o600)
     address = host.execute(
-        "select address from duckflight_flight_serve('127.0.0.1:0', ?)",
+        "select address from duckflight_serve('flight', '127.0.0.1:0', config_file := ?)",
         [str(deadline_config)],
     ).fetchone()[0]
     try:
@@ -298,11 +298,9 @@ def check_independent_listener_lifetimes(
     addresses: dict[str, str] = {}
 
     def start(protocol: str) -> str:
-        function = (
-            "duckflight_flight_serve" if protocol == "flight" else "duckflight_pg_serve"
-        )
         address = host.execute(
-            f"select address from {function}('127.0.0.1:0', ?)", [str(config)]
+            "select address from duckflight_serve(?, '127.0.0.1:0', config_file := ?)",
+            [protocol, str(config)],
         ).fetchone()[0]
         addresses[protocol] = address
         return address
@@ -397,7 +395,7 @@ def run(extension: Path, duckdb_cli: Path | None = None) -> None:
                     "bundled ABI v1 core",
                 )
                 address = host.execute(
-                    "select address from duckflight_flight_serve('127.0.0.1:0', ?)",
+                    "select address from duckflight_serve('flight', '127.0.0.1:0', config_file := ?)",
                     [str(config)],
                 ).fetchone()[0]
                 check_repeated_sessions(host, address)
@@ -408,7 +406,7 @@ def run(extension: Path, duckdb_cli: Path | None = None) -> None:
                 ).fetchall()
                 address = None
                 address = host.execute(
-                    "select address from duckflight_flight_serve('127.0.0.1:0', ?)",
+                    "select address from duckflight_serve('flight', '127.0.0.1:0', config_file := ?)",
                     [str(config)],
                 ).fetchone()[0]
                 with Session(address) as session:

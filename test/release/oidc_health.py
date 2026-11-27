@@ -109,7 +109,7 @@ scopes = ["query:execute"]
             config.chmod(0o600)
             host.execute("load '" + str(extension.resolve()).replace("'", "''") + "'")
             address = host.execute(
-                "select address from duckflight_flight_serve('127.0.0.1:0', ?)",
+                "select address from duckflight_serve('flight', '127.0.0.1:0', config_file := ?)",
                 [str(config)],
             ).fetchone()[0]
             with flight.FlightClient(f"grpc://{address}") as client:

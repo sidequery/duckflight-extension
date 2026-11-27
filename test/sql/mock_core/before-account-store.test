@@ -12,7 +12,7 @@ select loaded::varchar, abi_version::varchar from duckflight_core_status();
 true	1
 
 query TT
-select * from duckflight_pg_serve('127.0.0.1:0', 'duckflight.toml');
+select * from duckflight_serve('pgwire', '127.0.0.1:0', config_file := 'duckflight.toml');
 ----
 pgwire	127.0.0.1:15432
 

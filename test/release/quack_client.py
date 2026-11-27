@@ -322,7 +322,7 @@ def run(cli: Path, extension: Path | None, repository: str | None) -> None:
                 "insert into labels values (1, 'first')"
             )
             address = host.execute(
-                "select address from duckflight_quack_serve('127.0.0.1:0', ?)",
+                "select address from duckflight_serve('quack', '127.0.0.1:0', config_file := ?)",
                 [str(config)],
             ).fetchone()[0]
             try:

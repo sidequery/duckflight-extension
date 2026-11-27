@@ -99,13 +99,13 @@ def run(cli: Path, extension: Path) -> None:
             # HTTP serves one identity per listener, so each token gets its own.
             addresses = {
                 label: host.execute(
-                    f"select address from duckflight_{function}_serve('127.0.0.1:0', ?)",
-                    [str(config)],
+                    "select address from duckflight_serve(?, '127.0.0.1:0', config_file := ?)",
+                    [protocol, str(config)],
                 ).fetchone()[0]
-                for label, function in [
+                for label, protocol in [
                     ("reader", "http"),
                     ("writer", "http"),
-                    ("pgwire", "pg"),
+                    ("pgwire", "pgwire"),
                 ]
             }
             host.execute("create table trips as select 1 as id")

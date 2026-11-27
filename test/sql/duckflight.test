@@ -11,7 +11,13 @@ select * from duckflight_servers();
 ----
 
 statement error
-select * from duckflight_adbc_serve('127.0.0.1:0', '');
+select * from duckflight_serve('adbc', '127.0.0.1:0');
+----
+unsupported DuckFlight extension protocol
+
+# One function starts every protocol; the per-protocol names are gone.
+statement error
+select * from duckflight_pg_serve('127.0.0.1:0', '');
 ----
 does not exist
 
@@ -21,22 +27,22 @@ select * from duckflight_stop('adbc', '127.0.0.1:15051');
 unsupported DuckFlight extension protocol
 
 query TT
-select * from duckflight_pg_serve('127.0.0.1:0', '');
+select * from duckflight_serve('pgwire', '127.0.0.1:0');
 ----
 pgwire	127.0.0.1:15432
 
 query TT
-select * from duckflight_flight_serve('127.0.0.1:0', '');
+select * from duckflight_serve('flight', '127.0.0.1:0');
 ----
 flight	127.0.0.1:15051
 
 query TT
-select * from duckflight_http_serve('127.0.0.1:0', '');
+select * from duckflight_serve('http', '127.0.0.1:0');
 ----
 http	127.0.0.1:18080
 
 query TT
-select * from duckflight_quack_serve('127.0.0.1:0', '');
+select * from duckflight_serve('quack', '127.0.0.1:0');
 ----
 quack	127.0.0.1:18081
 
@@ -289,9 +295,9 @@ from duckflight_config_check('duckflight.toml');
 ----
 .duckflight/store.duckdb	true	true	5	2	1
 
-# The two-argument serve functions take an empty config file to serve the account store.
+# Without config_file the listener serves the account store.
 query TT
-select * from duckflight_pg_serve('127.0.0.1:0', '');
+select * from duckflight_serve('pgwire', '127.0.0.1:0');
 ----
 pgwire	127.0.0.1:15432
 

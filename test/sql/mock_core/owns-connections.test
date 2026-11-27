@@ -12,7 +12,7 @@ select loaded::varchar, abi_version::varchar from duckflight_core_status();
 true	1
 
 statement error
-select * from duckflight_pg_serve('127.0.0.1:0', '');
+select * from duckflight_serve('pgwire', '127.0.0.1:0');
 ----
 only be called from the process that owns the database
 

@@ -378,66 +378,60 @@ const HOST_ONLY: &str = "DuckFlight server and setup functions can only be calle
 
 #[derive(Clone)]
 struct ServeBindData {
+    protocol: Protocol,
     address: String,
     config_file: String,
 }
 
-/// An empty `config_file` serves the host's account store. There is no one-argument overload:
-/// DuckDB's C API keeps the first table function registered under a name and silently ignores
-/// any later registration of it, whatever its parameters.
-macro_rules! define_serve {
-    ($name:ident, $protocol:expr) => {
-        struct $name;
+/// Starts one listener. Without `config_file` the listener serves the host's account store.
+struct Serve;
 
-        impl VTab for $name {
-            type InitData = EmitOnce;
-            type BindData = ServeBindData;
+impl VTab for Serve {
+    type InitData = EmitOnce;
+    type BindData = ServeBindData;
 
-            fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
-                require_host_connection(bind)?;
-                bind.add_result_column("protocol", varchar());
-                bind.add_result_column("address", varchar());
-                Ok(ServeBindData {
-                    address: bind.get_parameter(0).to_string(),
-                    config_file: bind.get_parameter(1).to_string(),
-                })
-            }
+    fn bind(bind: &BindInfo) -> Result<Self::BindData, Box<dyn Error>> {
+        require_host_connection(bind)?;
+        bind.add_result_column("protocol", varchar());
+        bind.add_result_column("address", varchar());
+        Ok(ServeBindData {
+            protocol: Protocol::parse(&bind.get_parameter(0).to_string())?,
+            address: bind.get_parameter(1).to_string(),
+            config_file: optional_argument(bind, "config_file"),
+        })
+    }
 
-            fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
-                Ok(EmitOnce::new())
-            }
+    fn init(_: &InitInfo) -> Result<Self::InitData, Box<dyn Error>> {
+        Ok(EmitOnce::new())
+    }
 
-            fn func(
-                info: &TableFunctionInfo<Self>,
-                output: &mut DataChunkHandle,
-            ) -> Result<(), Box<dyn Error>> {
-                if info.get_init_data().done.swap(true, Ordering::Relaxed) {
-                    output.set_len(0);
-                    return Ok(());
-                }
-                let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
-                let address = state.core.start(
-                    $protocol,
-                    &info.get_bind_data().address,
-                    &info.get_bind_data().config_file,
-                )?;
-                set_string(output, 0, 0, $protocol.as_str())?;
-                set_string(output, 1, 0, &address)?;
-                output.set_len(1);
-                Ok(())
-            }
-
-            fn parameters() -> Option<Vec<LogicalTypeHandle>> {
-                Some(vec![varchar(), varchar()])
-            }
+    fn func(
+        info: &TableFunctionInfo<Self>,
+        output: &mut DataChunkHandle,
+    ) -> Result<(), Box<dyn Error>> {
+        if info.get_init_data().done.swap(true, Ordering::Relaxed) {
+            output.set_len(0);
+            return Ok(());
         }
-    };
-}
+        let bind = info.get_bind_data();
+        let state = unsafe { &*info.get_extra_info::<Arc<ExtensionState>>() };
+        let address = state
+            .core
+            .start(bind.protocol, &bind.address, &bind.config_file)?;
+        set_string(output, 0, 0, bind.protocol.as_str())?;
+        set_string(output, 1, 0, &address)?;
+        output.set_len(1);
+        Ok(())
+    }
 
-define_serve!(PgWireServe, Protocol::PgWire);
-define_serve!(FlightSqlServe, Protocol::FlightSql);
-define_serve!(HttpServe, Protocol::Http);
-define_serve!(QuackServe, Protocol::Quack);
+    fn parameters() -> Option<Vec<LogicalTypeHandle>> {
+        Some(vec![varchar(), varchar()])
+    }
+
+    fn named_parameters() -> Option<Vec<(String, LogicalTypeHandle)>> {
+        named_varchars(&["config_file"])
+    }
+}
 
 #[derive(Clone)]
 struct StopBindData {
@@ -1120,18 +1114,7 @@ fn register_extension(
     connection: &Connection,
     state: Arc<ExtensionState>,
 ) -> DuckResult<(), Box<dyn Error>> {
-    connection
-        .register_table_function_with_extra_info::<PgWireServe, _>("duckflight_pg_serve", &state)?;
-    connection.register_table_function_with_extra_info::<FlightSqlServe, _>(
-        "duckflight_flight_serve",
-        &state,
-    )?;
-    connection
-        .register_table_function_with_extra_info::<HttpServe, _>("duckflight_http_serve", &state)?;
-    connection.register_table_function_with_extra_info::<QuackServe, _>(
-        "duckflight_quack_serve",
-        &state,
-    )?;
+    connection.register_table_function_with_extra_info::<Serve, _>("duckflight_serve", &state)?;
     connection
         .register_table_function_with_extra_info::<StopServer, _>("duckflight_stop", &state)?;
     connection

@@ -19,14 +19,10 @@ repo:
 docs:
   hello_world: |
     -- Let PostgreSQL clients query this DuckDB database.
-    SELECT * FROM duckflight_pg_serve(
-      '127.0.0.1:5433', '/path/to/duckflight.toml'
-    );
+    SELECT * FROM duckflight_serve('pgwire', '127.0.0.1:5433', config_file := '/path/to/duckflight.toml');
 
     -- Let Arrow Flight SQL clients query the same database.
-    SELECT * FROM duckflight_flight_serve(
-      '127.0.0.1:31337', '/path/to/duckflight.toml'
-    );
+    SELECT * FROM duckflight_serve('flight', '127.0.0.1:31337', config_file := '/path/to/duckflight.toml');
   extended_description: |
     Use DuckDB as a database server. DuckFlight lets PostgreSQL, Arrow Flight SQL, HTTP, and Quack
     clients query the same live DuckDB database that loaded the extension—no export, copy, or
@@ -47,10 +43,7 @@ docs:
 
     | Function | Purpose |
     | --- | --- |
-    | `duckflight_pg_serve(address, config_file)` | Starts an authenticated PostgreSQL listener; returns its protocol and bound address. |
-    | `duckflight_flight_serve(address, config_file)` | Starts an authenticated Arrow Flight SQL listener; returns its protocol and bound address. |
-    | `duckflight_http_serve(address, config_file)` | Starts an authenticated HTTP Arrow IPC listener; returns its protocol and bound address. |
-    | `duckflight_quack_serve(address, config_file)` | Starts an authenticated binary Quack listener; returns its protocol and bound address. |
+    | `duckflight_serve(protocol, address, config_file := '')` | Starts an authenticated listener for `postgres`, `flight`, `http` or `quack`; returns its protocol and bound address. |
     | `duckflight_stop(protocol, address)` | Stops the specified listener and returns its status. |
     | `duckflight_servers()` | Lists running listeners and their bound addresses. |
     | `duckflight_core_status()` | Reports whether the runtime loaded, its ABI version, and status details. |

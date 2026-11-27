@@ -99,14 +99,14 @@ def run(cli: Path, extension: Path) -> None:
 
                 # No config file: the listeners authenticate against the store.
                 addresses = {
-                    function: host.execute(
-                        f"select address from duckflight_{function}_serve('127.0.0.1:0', '')"
+                    protocol: host.execute(
+                        "select address from duckflight_serve(?, '127.0.0.1:0')", [protocol]
                     ).fetchone()[0]
-                    for function in ("pg", "http")
+                    for protocol in ("pgwire", "http")
                 }
                 host.execute("create table trips as select 1 as id")
 
-                with connect(addresses["pg"], "alice", admin_password) as session:
+                with connect(addresses["pgwire"], "alice", admin_password) as session:
                     user, bob_password = session.execute(
                         "create user bob role writer"
                     ).fetchone()
@@ -130,7 +130,7 @@ def run(cli: Path, extension: Path) -> None:
                             outcome = str(error)
                         assert REFUSAL in outcome, (sql, outcome)
 
-                with connect(addresses["pg"], "bob", bob_password) as session:
+                with connect(addresses["pgwire"], "bob", bob_password) as session:
                     assert session.execute("select id from trips").fetchall() == [(1,)]
                 status, body = http(addresses["http"], token, "insert into trips values (2)")
                 assert status == 200, (status, body)
@@ -156,7 +156,7 @@ def run(cli: Path, extension: Path) -> None:
                     ("token", "loader", "ci", "writer"),
                     ("user", "legacy", "legacy", "admin"),
                 ], imported
-                with connect(addresses["pg"], "legacy", LEGACY_PASSWORD) as session:
+                with connect(addresses["pgwire"], "legacy", LEGACY_PASSWORD) as session:
                     assert session.execute("select count(*) from trips").fetchall() == [(2,)]
                 status, body = http(addresses["http"], legacy_token, "select id from trips")
                 assert status == 200, (status, body)
@@ -177,10 +177,8 @@ def run(cli: Path, extension: Path) -> None:
                 for secret in (admin_password, bob_password, token, legacy_token):
                     assert secret.encode() not in stored
 
-                for protocol, function in (("pgwire", "pg"), ("http", "http")):
-                    host.execute(
-                        "select * from duckflight_stop(?, ?)", [protocol, addresses[function]]
-                    )
+                for protocol, address in addresses.items():
+                    host.execute("select * from duckflight_stop(?, ?)", [protocol, address])
 
             # Requests the initialized store cannot honour say why and change nothing.
             content = legacy.read_text()

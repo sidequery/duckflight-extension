@@ -41,13 +41,13 @@ static void setting(FILE *output, const char *variable, const char *name) {
     fputs(";\n", output);
 }
 
-static void serve(FILE *output, const char *protocol, const char *function,
-                  const char *address, const char *config) {
+static void serve(FILE *output, const char *protocol, const char *address,
+                  const char *config) {
     if (!*address) return;
-    fprintf(output, "select 'DuckFlight %s listening on ' || address from %s(",
-            protocol, function);
+    fprintf(output, "select 'DuckFlight %s listening on ' || address from duckflight_serve('%s',",
+            protocol, protocol);
     sql_string(output, address);
-    fputc(',', output);
+    fputs(",config_file:=", output);
     sql_string(output, config);
     fputs(");\n", output);
 }
@@ -165,8 +165,8 @@ int main(void) {
               "set enable_external_access=false;\n"
               "set lock_configuration=true;\n", commands);
     }
-    if (!stopping) serve(commands, "pgwire", "duckflight_pg_serve", pg, config);
-    if (!stopping) serve(commands, "flight", "duckflight_flight_serve", flight, config);
+    if (!stopping) serve(commands, "pgwire", pg, config);
+    if (!stopping) serve(commands, "flight", flight, config);
     if (!stopping) fputs(".print DuckFlight ready\n", commands);
     sigprocmask(SIG_BLOCK, &termination, NULL);
 
