@@ -83,6 +83,9 @@ name even when one was sent. Check the user with `show users` as an administrato
 is [ignored](#users-or-tokens-from-the-config-file-stop-working) once the account store has a
 user.
 
+To log in with a token instead of a password, the user name is `<user>~<token name>`; see
+[Tokens](AUTHENTICATION.md#tokens). A token created before 0.2.1 has no PostgreSQL login.
+
 ### `FATAL:  TLS is required`
 
 The PostgreSQL listener has a `[tls]` section and the client connected without TLS. Use
@@ -102,9 +105,8 @@ store ignores. HTTP never accepts a user name and password.
 
 ### HTTP `409`: `HTTP is configured single-tenant per listener`
 
-An HTTP listener serves the first user that authenticates on it and refuses every other user.
-Start another listener with `duckflight_serve('http', ...)` for the second user, or stop and
-restart the listener to hand it to a different one.
+DuckFlight 0.2.0 let an HTTP listener serve only the first user that authenticated on it. Update
+to 0.2.1, where every listener serves any number of users.
 
 ### `Capability does not grant required scope: query:mutate`
 

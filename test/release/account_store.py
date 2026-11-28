@@ -144,6 +144,19 @@ def run(cli: Path, extension: Path) -> None:
                 assert status == 200, (status, body)
                 status, _ = http(addresses["http"], token + "x", "select id from trips")
                 assert status == 401, status
+                # A PostgreSQL client logs in with a token as `<user>~<token name>`.
+                with connect(addresses["pgwire"], "bob~nightly", token) as session:
+                    assert session.execute("select current_user").fetchall() == [
+                        ("bob",)
+                    ]
+                    session.execute("insert into trips values (3)")
+                    session.execute("delete from trips where id = 3")
+                for user, secret in (("bob", token), ("bob~nightly", token + "x")):
+                    try:
+                        connect(addresses["pgwire"], user, secret).close()
+                        raise AssertionError(f"{user} logged in with a wrong secret")
+                    except psycopg.OperationalError:
+                        pass
 
                 # The file's accounts are ignored until they are imported.
                 row = host.execute(
@@ -153,13 +166,8 @@ def run(cli: Path, extension: Path) -> None:
                 ).fetchone()
                 assert Path(row[0]).resolve() == store.resolve(), row
                 assert row[1:] == (True, True, 2, 1, 1), row
-                # An HTTP listener serves the first user that authenticates on it, so the
-                # file's token gets a listener of its own.
-                addresses["legacy http"] = host.execute(
-                    "select address from duckflight_serve('http', '127.0.0.1:0')"
-                ).fetchone()[0]
                 status, _ = http(
-                    addresses["legacy http"], legacy_token, "select id from trips"
+                    addresses["http"], legacy_token, "select id from trips"
                 )
                 assert status == 401, status
 
@@ -177,14 +185,13 @@ def run(cli: Path, extension: Path) -> None:
                     assert session.execute("select count(*) from trips").fetchall() == [
                         (2,)
                     ]
-                status, body = http(
-                    addresses["legacy http"], legacy_token, "select id from trips"
-                )
-                assert status == 200, (status, body)
+                # Several users share one HTTP listener.
                 status, body = http(
                     addresses["http"], legacy_token, "select id from trips"
                 )
-                assert status == 409, (status, body)
+                assert status == 200, (status, body)
+                status, body = http(addresses["http"], token, "select id from trips")
+                assert status == 200, (status, body)
 
                 accounts = host.execute(
                     "select user, role, has_password, tokens::int, tenant "

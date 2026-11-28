@@ -80,7 +80,7 @@ All listeners serve the same database and can run at the same time.
 
 | Protocol | Name for `duckflight_serve` | Clients | Credentials accepted |
 | --- | --- | --- | --- |
-| PostgreSQL wire | `postgres` | `psql`, Psycopg, JDBC, SQLAlchemy, BI tools | Passwords, bearer tokens (OAUTHBEARER), OIDC, mTLS |
+| PostgreSQL wire | `postgres` | `psql`, Psycopg, JDBC, SQLAlchemy, BI tools | Passwords, tokens (as the password of `<user>~<token name>`), OIDC, mTLS |
 | Arrow Flight SQL | `flight` | ADBC drivers, DuckDB's Airport extension | Passwords, bearer tokens, OIDC, mTLS |
 | HTTP (Arrow IPC) | `http` | Anything that can `POST` JSON and read Arrow | Bearer tokens, OIDC, mTLS |
 | Quack | `quack` | Another DuckDB, through its `quack` extension | Bearer tokens, OIDC, mTLS |
@@ -94,8 +94,8 @@ supported.
 
 | Your DuckDB | Install from | DuckFlight version | Notes |
 | --- | --- | --- | --- |
-| 2.0.1 | Sidequery repository | 0.2.0 | All four protocols and [SQL access controls](docs/ACCESS_CONTROL.md). Community serves 0.1.21 until it publishes 0.2.0 |
-| 2.0.0 | Sidequery repository | 0.2.0 | All four protocols. Community serves 0.1.20 for this DuckDB version |
+| 2.0.1 | Sidequery repository | 0.2.1 | All four protocols and [SQL access controls](docs/ACCESS_CONTROL.md). Community serves 0.1.21 until it publishes 0.2.1 |
+| 2.0.0 | Sidequery repository | 0.2.1 | All four protocols. Community serves 0.1.20 for this DuckDB version |
 | 1.5.6 | Community | 0.1.12 | PostgreSQL and Flight SQL only |
 
 Check what you have with:
