@@ -26,7 +26,7 @@ and tokens were written into `duckflight.toml`, see [Upgrading from 0.1.x](#upgr
 | Method | Works with | Sent on the wire | Set up with |
 | --- | --- | --- | --- |
 | [Password](#passwords) | PostgreSQL, Flight SQL | SCRAM-SHA-256 for PostgreSQL; a Basic header during the Flight handshake, then a server-issued bearer | `duckflight_init`, `CREATE USER` |
-| [Bearer token](#tokens) | PostgreSQL (SASL OAUTHBEARER), Flight SQL, HTTP, Quack | The token on every request; once at startup for PostgreSQL | `duckflight_token_add`, `CREATE TOKEN` |
+| [Bearer token](#tokens) | PostgreSQL, Flight SQL, HTTP, Quack | The token on every request; for PostgreSQL, as the password of `<user>~<token name>` | `duckflight_token_add`, `CREATE TOKEN` |
 | [OIDC](#oidc) | PostgreSQL (SASL OAUTHBEARER), Flight SQL, HTTP, Quack | The provider's access token | `[[oidc]]` in the config file |
 | [mTLS](#mtls) | Listeners with TLS | A client certificate, mapped by SHA-256 fingerprint | `[tls]` with `client_ca` and `identities` |
 
@@ -193,17 +193,27 @@ handshake.
 ## Tokens
 
 A token belongs to one user and acts with that user's role. DuckFlight generates each token with
-256 bits of randomness and returns it once; the store keeps only its SHA-256 digest. Token names
+256 bits of randomness and returns it once; the store keeps only its SHA-256 digest and a SCRAM
+verifier, never the token. Token names
 are unique per user and appear in `SHOW TOKENS`, so name them after the client that holds them.
 
-Tokens are accepted by every listener. Flight SQL, HTTP and Quack take them as
-`authorization: Bearer <token>`. The PostgreSQL listener takes them through SASL `OAUTHBEARER`,
-with the token's user as the startup user. Few PostgreSQL clients can send a fixed bearer token
-that way, so most connect with the user's password instead.
+Tokens are accepted by every listener, and every listener serves any number of users at once.
+Flight SQL, HTTP and Quack take a token as `authorization: Bearer <token>`.
 
-An HTTP listener serves one user: the first user that authenticates on it. Another user's token
-on the same listener is refused with status `409` until the listener is stopped and started
-again. Give each HTTP user a listener of its own. The other listeners serve any number of users.
+A PostgreSQL client uses the token as its password, with the user name `<user>~<token name>`:
+
+```sh
+psql "postgres://alice~ci:$TOKEN@127.0.0.1:5433/memory"
+```
+
+The session is the user's: `current_user` is `alice`, with her role, and it ends when the token or
+the user is dropped. The plain user name still takes the user's password. The token name is part
+of the user name because a PostgreSQL password login fixes its secret by user name before the
+client sends anything. Clients with SASL `OAUTHBEARER` support can instead send the token as a
+bearer token under the plain user name.
+
+A token created before 0.2.1, or imported from a config file, has no PostgreSQL login. It keeps
+working on the other listeners; create a new token to use one with PostgreSQL.
 
 To rotate a token, create the new one, update the client, then drop the old one:
 
@@ -481,7 +491,7 @@ instead. It does not manage `[store]` tables. Run it from a release tag with
 [uv](https://docs.astral.sh/uv/):
 
 ```sh
-alias duckflight-auth='uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.2.0/scripts/duckflight_auth.py'
+alias duckflight-auth='uv run https://raw.githubusercontent.com/sidequery/duckflight-extension/v0.2.1/scripts/duckflight_auth.py'
 ```
 
 ```sh

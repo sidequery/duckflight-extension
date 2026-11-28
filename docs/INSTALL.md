@@ -11,10 +11,10 @@ release exactly, so the DuckFlight version you receive depends on the DuckDB you
 | Your DuckDB | Channel | DuckFlight | Signed by | Protocols |
 | --- | --- | --- | --- | --- |
 | 2.0.1 | [Community](#duckdb-community-extensions) | 0.1.21 | DuckDB | PostgreSQL, Flight SQL, HTTP, Quack |
-| 2.0.1 | [Sidequery repository](#sidequery-repository) | 0.2.0 | Sidequery | PostgreSQL, Flight SQL, HTTP, Quack |
-| 2.0.1 | [GitHub release artifact](#github-release-artifacts) | 0.2.0 | Unsigned | PostgreSQL, Flight SQL, HTTP, Quack |
-| 2.0.0 | Sidequery repository | 0.2.0 | Sidequery | PostgreSQL, Flight SQL, HTTP, Quack |
-| 2.0.0 | GitHub release artifact | 0.2.0 | Unsigned | PostgreSQL, Flight SQL, HTTP, Quack |
+| 2.0.1 | [Sidequery repository](#sidequery-repository) | 0.2.1 | Sidequery | PostgreSQL, Flight SQL, HTTP, Quack |
+| 2.0.1 | [GitHub release artifact](#github-release-artifacts) | 0.2.1 | Unsigned | PostgreSQL, Flight SQL, HTTP, Quack |
+| 2.0.0 | Sidequery repository | 0.2.1 | Sidequery | PostgreSQL, Flight SQL, HTTP, Quack |
+| 2.0.0 | GitHub release artifact | 0.2.1 | Unsigned | PostgreSQL, Flight SQL, HTTP, Quack |
 | 2.0.0 | Community | 0.1.20 | DuckDB | PostgreSQL, Flight SQL, HTTP, Quack |
 | 1.5.6 | Community | 0.1.12 | DuckDB | PostgreSQL, Flight SQL |
 | 1.5.6 | [Docker image](DOCKER.md) | Built from source | Unsigned | PostgreSQL, Flight SQL |
@@ -30,8 +30,8 @@ users and tokens, needs DuckFlight 0.2.0 or later. Earlier builds, including 0.1
 Supported platforms are Linux and macOS on amd64 and arm64 (`linux_amd64`, `linux_arm64`,
 `osx_amd64`, `osx_arm64`). Windows, WebAssembly and Linux musl are not supported.
 
-Community serves 0.1.21 for DuckDB 2.0.1 until it publishes 0.2.0, and 0.1.20 for DuckDB 2.0.0. For
-0.2.0, install from the [Sidequery repository](#sidequery-repository).
+Community serves 0.1.21 for DuckDB 2.0.1 until it publishes 0.2.1, and 0.1.20 for DuckDB 2.0.0. For
+0.2.1, install from the [Sidequery repository](#sidequery-repository).
 
 If you installed from Community on DuckDB 2.0.1 before 0.1.21 was published, you have 0.1.17,
 which loads but reports `DuckFlight host factory requires DuckDB v2.0.0; host is v2.0.1` in
